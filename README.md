@@ -2,10 +2,32 @@
 
 A PowerShell module to configure AWS SSO (SAML) profiles with minimal user interaction. Compatible with PowerShell 5.1 and 7+.
 
+## Project Origin
+
+This module was developed based on the following requirements:
+
+> **Initial Request:**
+> "Write a PowerShell function compatible with version 7 and 5.1, that will help the user configure multiple SAML SSO configuration. Minimal interactive input from the user, such as the SSO url, and which of the list of accounts and roles do they want to add to the local config."
+
+> **Refinements:**
+> - Target: AWS SSO SAML
+> - Functionality: Authentication, account/role retrieval, profile selection, and AWS config writing
+> - Config Format: AWS config file format
+> - Note: Cannot be fully tested without AWS SSO access
+
+> **Enhanced Features:**
+> - SSO session support with multiple sessions per SSO URL
+> - All accounts/roles must use the designated SSO session
+> - Session naming: `sso-session-{username}`
+> - Automatic or user-defined profile naming schemes
+> - Overwrite confirmation for existing profiles
+> - Warning for existing configuration files
+
 ## Features
 
 - **SSO Session Management**: Creates reusable SSO sessions that multiple profiles reference
 - **Configuration Retrieval**: View and query existing SSO configuration with multiple output formats
+- **Smart Overwrite Protection**: Warns about existing config and asks for confirmation before overwriting profiles
 - **Automatic Session Naming**: Session named `sso-session-{username}` based on your SSO identity
 - **Device Authorization Flow**: Secure authentication using AWS SSO device authorization
 - **Automatic Discovery**: Retrieves all available AWS accounts and roles
@@ -121,7 +143,8 @@ The function follows these steps:
 5. **User Identity**: Retrieves your username for session naming
 6. **Account/Role Discovery**: Retrieves all available AWS accounts and roles
 7. **Interactive Selection**: Presents a menu to select desired profiles
-8. **Config Writing**: Creates SSO session and writes profiles to `~/.aws/config`
+8. **Overwrite Confirmation**: If config exists, warns and prompts for confirmation on existing profiles
+9. **Config Writing**: Creates SSO session and writes profiles to `~/.aws/config`
 
 ## Interactive Selection
 
@@ -489,7 +512,30 @@ The module handles differences automatically:
 
 ### Profile Already Exists
 
-The module skips profiles that already exist in your config. To recreate a profile, manually remove it from `~/.aws/config` first.
+When a profile already exists, the module will prompt you for confirmation:
+
+- **(Y)es**: Overwrite this specific profile
+- **(N)o**: Skip this profile (default)
+- **(A)ll**: Overwrite this and all subsequent existing profiles without asking
+- **(S)kip all**: Skip this and all subsequent existing profiles without asking
+
+The module shows:
+- A warning when the config file already exists
+- Profile details (account and role) before asking for confirmation
+- A summary of profiles added and overwritten at the end
+
+Example interaction:
+```
+WARNING: AWS config file already exists at: ~/.aws/config
+Existing profiles may be overwritten if you confirm.
+
+  Profile 'production-administrator' already exists.
+    Account: 123456789012
+    Role: Administrator
+
+  Overwrite? (Y)es, (N)o, (A)ll, (S)kip all [default: N]: y
+  Overwriting profile: production-administrator
+```
 
 ## Examples
 

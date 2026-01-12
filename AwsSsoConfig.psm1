@@ -478,10 +478,16 @@ function Write-AwsConfig {
         New-Item -ItemType Directory -Path $awsConfigDir -Force | Out-Null
     }
 
-    # Read existing config if it exists
+    # Read existing config if it exists and warn user
     $existingConfig = ""
-    if (Test-Path $awsConfigPath) {
+    $configFileExists = Test-Path $awsConfigPath
+
+    if ($configFileExists) {
         $existingConfig = Get-Content $awsConfigPath -Raw
+        Write-Host ""
+        Write-Host "WARNING: AWS config file already exists at: $awsConfigPath" -ForegroundColor Yellow
+        Write-Host "Existing profiles may be overwritten if you confirm." -ForegroundColor Yellow
+        Write-Host ""
     }
 
     # Create SSO session if it doesn't exist
@@ -502,6 +508,9 @@ sso_registration_scopes = sso:account:access
 
     # Generate new profiles
     $newProfiles = @()
+    $profilesToOverwrite = @()
+    $overwriteAll = $false
+    $skipAll = $false
 
     foreach ($role in $SelectedRoles) {
         $profileName = Get-ProfileName -Role $role `
@@ -525,7 +534,77 @@ output = json
             Write-Host "  Added profile: $profileName" -ForegroundColor Green
         }
         else {
-            Write-Host "  Skipped (already exists): $profileName" -ForegroundColor Yellow
+            # Profile exists - ask for confirmation
+            $shouldOverwrite = $false
+
+            if ($overwriteAll) {
+                $shouldOverwrite = $true
+                Write-Host "  Overwriting profile: $profileName" -ForegroundColor Cyan
+            }
+            elseif ($skipAll) {
+                Write-Host "  Skipped (already exists): $profileName" -ForegroundColor Yellow
+            }
+            else {
+                Write-Host ""
+                Write-Host "  Profile '$profileName' already exists." -ForegroundColor Yellow
+                Write-Host "    Account: $($role.AccountId)" -ForegroundColor Gray
+                Write-Host "    Role: $($role.RoleName)" -ForegroundColor Gray
+                Write-Host ""
+
+                $response = ""
+                while ($response -notin @('y', 'n', 'a', 's')) {
+                    $response = (Read-Host "  Overwrite? (Y)es, (N)o, (A)ll, (S)kip all [default: N]").ToLower()
+                    if ([string]::IsNullOrWhiteSpace($response)) {
+                        $response = 'n'
+                    }
+                }
+
+                switch ($response) {
+                    'y' {
+                        $shouldOverwrite = $true
+                        Write-Host "  Overwriting profile: $profileName" -ForegroundColor Cyan
+                    }
+                    'a' {
+                        $overwriteAll = $true
+                        $shouldOverwrite = $true
+                        Write-Host "  Overwriting profile: $profileName (and all subsequent)" -ForegroundColor Cyan
+                    }
+                    's' {
+                        $skipAll = $true
+                        Write-Host "  Skipped (and skipping all subsequent): $profileName" -ForegroundColor Yellow
+                    }
+                    'n' {
+                        Write-Host "  Skipped: $profileName" -ForegroundColor Yellow
+                    }
+                }
+            }
+
+            if ($shouldOverwrite) {
+                $profilesToOverwrite += @{
+                    ProfileName = $profileName
+                    Config = $profileConfig
+                }
+            }
+        }
+    }
+
+    # Handle profiles to overwrite
+    if ($profilesToOverwrite.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Processing overwrite operations..." -ForegroundColor Cyan
+
+        foreach ($item in $profilesToOverwrite) {
+            # Remove old profile section from config
+            $profilePattern = "(?ms)\[profile $($item.ProfileName)\].*?(?=\n\[|\z)"
+            $existingConfig = $existingConfig -replace $profilePattern, ""
+        }
+
+        # Write updated config back (without old profiles)
+        Set-Content -Path $awsConfigPath -Value $existingConfig.TrimEnd() -NoNewline
+
+        # Add overwritten profiles to new profiles list
+        foreach ($item in $profilesToOverwrite) {
+            $newProfiles += $item.Config
         }
     }
 
@@ -542,6 +621,17 @@ output = json
         Add-Content -Path $awsConfigPath -Value ($configToAdd -join "`n") -NoNewline
         Write-Host ""
         Write-Host "Configuration written to: $awsConfigPath" -ForegroundColor Green
+
+        # Summary
+        $addedCount = $newProfiles.Count - $profilesToOverwrite.Count
+        $overwrittenCount = $profilesToOverwrite.Count
+
+        if ($addedCount -gt 0) {
+            Write-Host "  New profiles added: $addedCount" -ForegroundColor Green
+        }
+        if ($overwrittenCount -gt 0) {
+            Write-Host "  Profiles overwritten: $overwrittenCount" -ForegroundColor Cyan
+        }
     }
     else {
         Write-Host ""
