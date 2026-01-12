@@ -5,12 +5,14 @@ A PowerShell module to configure AWS SSO (SAML) profiles with minimal user inter
 ## Features
 
 - **SSO Session Management**: Creates reusable SSO sessions that multiple profiles reference
+- **Configuration Retrieval**: View and query existing SSO configuration with multiple output formats
 - **Automatic Session Naming**: Session named `sso-session-{username}` based on your SSO identity
 - **Device Authorization Flow**: Secure authentication using AWS SSO device authorization
 - **Automatic Discovery**: Retrieves all available AWS accounts and roles
 - **Interactive Selection**: Simple menu to select which profiles to configure
 - **Flexible Profile Naming**: Multiple naming schemes (AccountRole, AccountIdRole, RoleAccount, Custom)
 - **AWS Config Format**: Writes profiles directly to `~/.aws/config` using modern SSO session format
+- **Comprehensive Error Handling**: Detailed error messages for troubleshooting
 - **Cross-Platform**: Works on Windows, Linux, and macOS
 - **Dual Version Support**: Compatible with PowerShell 5.1 and 7+
 
@@ -47,10 +49,26 @@ pwsh -c "Import-Module AwsSsoConfig"
 
 ## Usage
 
-### Basic Usage
+### Setting Up SSO Configuration
 
 ```powershell
 Set-AwsSsoConfiguration -SsoStartUrl "https://my-sso-portal.awsapps.com/start"
+```
+
+### Viewing Existing Configuration
+
+```powershell
+# Display as formatted table
+Get-AwsSsoConfiguration -Format Table
+
+# Get as objects for scripting
+$config = Get-AwsSsoConfiguration
+
+# Get specific session
+Get-AwsSsoConfiguration -SessionName "sso-session-jdoe" -Format Table
+
+# Export as JSON
+Get-AwsSsoConfiguration -Format Json | Out-File config-backup.json
 ```
 
 ### With Custom Options
@@ -290,6 +308,150 @@ Default AWS region for all profiles. Default: `us-east-1`
 Custom SSO session name. Default: `sso-session-{username}`
 
 Example: `my-team-session`
+
+## Get-AwsSsoConfiguration Function
+
+The `Get-AwsSsoConfiguration` function retrieves and displays your existing AWS SSO configuration.
+
+### Features
+
+- **Parse AWS Config**: Reads and parses `~/.aws/config` file
+- **Multiple Output Formats**: Object, Table, or JSON
+- **Session Filtering**: Filter profiles by SSO session name
+- **Error Handling**: Comprehensive error handling for missing/invalid config
+- **Legacy Support**: Detects both modern (sso_session) and legacy profiles
+
+### Parameters
+
+#### `-SessionName` (Optional)
+Filter to show only profiles for a specific SSO session.
+
+Example: `Get-AwsSsoConfiguration -SessionName "sso-session-jdoe"`
+
+#### `-Format` (Optional)
+Output format. Default: `Object`
+
+Options:
+- **Object**: Returns PowerShell objects (default) - best for scripting
+- **Table**: Displays formatted console output - best for viewing
+- **Json**: Returns JSON string - best for export/integration
+
+### Output Structure
+
+When using `-Format Object`, returns a hashtable with:
+
+```powershell
+@{
+    ConfigPath = "~/.aws/config"        # Path to config file
+    Sessions = @(...)                    # Array of SSO session objects
+    Profiles = @(...)                    # Array of SSO profile objects
+    TotalSessions = 2                    # Count of sessions
+    TotalProfiles = 15                   # Count of profiles
+}
+```
+
+Each **Session** object contains:
+- `Name`: Session name
+- `SsoStartUrl`: SSO portal URL
+- `SsoRegion`: AWS region
+- `SsoRegistrationScopes`: OAuth scopes
+
+Each **Profile** object contains:
+- `ProfileName`: Profile name
+- `SsoSession`: Referenced session name
+- `SsoAccountId`: AWS account ID
+- `SsoRoleName`: IAM role name
+- `Region`: Default AWS region
+- `Output`: Output format
+- `Type`: "Modern" (uses sso_session) or "Legacy" (uses sso_start_url)
+
+### Examples
+
+#### Display as Table
+```powershell
+Get-AwsSsoConfiguration -Format Table
+```
+
+Output:
+```
+AWS SSO Configuration
+=====================
+Config File: /home/user/.aws/config
+
+SSO Sessions (2):
+
+  Session: sso-session-jdoe
+    Start URL: https://mycompany.awsapps.com/start
+    Region: us-east-1
+    Scopes: sso:account:access
+    Profiles: 8
+
+  Session: sso-session-admin
+    Start URL: https://admin.awsapps.com/start
+    Region: us-west-2
+    Scopes: sso:account:access
+    Profiles: 4
+
+SSO Profiles (12):
+
+  Session: sso-session-jdoe
+    Profile: production-administrator
+      Account: 123456789012
+      Role: Administrator
+      Region: us-east-1
+      Type: Modern
+    ...
+```
+
+#### Get as Objects for Scripting
+```powershell
+$config = Get-AwsSsoConfiguration
+
+# List all profile names
+$config.Profiles | ForEach-Object { $_.ProfileName }
+
+# Find profiles for specific account
+$config.Profiles | Where-Object { $_.SsoAccountId -eq "123456789012" }
+
+# Count profiles per session
+$config.Profiles | Group-Object SsoSession | Select-Object Name, Count
+```
+
+#### Filter by Session
+```powershell
+Get-AwsSsoConfiguration -SessionName "sso-session-jdoe" -Format Table
+```
+
+#### Export to JSON
+```powershell
+# Backup configuration
+Get-AwsSsoConfiguration -Format Json | Out-File aws-sso-backup.json
+
+# Pretty print with native PowerShell
+$config = Get-AwsSsoConfiguration
+$config | ConvertTo-Json -Depth 10 | Out-File aws-sso-config.json
+```
+
+#### Check if Config Exists
+```powershell
+$config = Get-AwsSsoConfiguration
+if ($config) {
+    Write-Host "Found $($config.TotalProfiles) profiles in $($config.TotalSessions) sessions"
+} else {
+    Write-Host "No SSO configuration found. Run Set-AwsSsoConfiguration to set up."
+}
+```
+
+### Error Handling
+
+The function handles various error scenarios:
+
+- **Config file not found**: Returns `$null` with warning message
+- **Permission denied**: Returns `$null` with error explaining permissions issue
+- **Empty config**: Returns `$null` with warning
+- **Invalid format**: Skips invalid sections, continues parsing valid ones
+- **No SSO profiles**: Returns `$null` with informative message
+- **Session not found**: Returns `$null` when filtering for non-existent session
 
 ## Compatibility Notes
 

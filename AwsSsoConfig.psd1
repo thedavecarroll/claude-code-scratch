@@ -10,7 +10,7 @@
     RootModule = 'AwsSsoConfig.psm1'
 
     # Functions to export
-    FunctionsToExport = @('Set-AwsSsoConfiguration')
+    FunctionsToExport = @('Set-AwsSsoConfiguration', 'Get-AwsSsoConfiguration')
 
     # Cmdlets to export
     CmdletsToExport = @()

@@ -653,4 +653,375 @@ function Invoke-RestMethodCompat {
     }
 }
 
-Export-ModuleMember -Function Set-AwsSsoConfiguration
+function Get-AwsSsoConfiguration {
+    <#
+    .SYNOPSIS
+        Retrieves and displays AWS SSO configuration from ~/.aws/config
+
+    .DESCRIPTION
+        Reads the AWS CLI config file and parses SSO sessions and SSO-enabled profiles.
+        Returns structured information about configured SSO sessions and their associated profiles.
+
+        Compatible with PowerShell 5.1 and 7+
+
+    .PARAMETER SessionName
+        Optional filter to show only profiles for a specific SSO session
+
+    .PARAMETER Format
+        Output format: Object (default), Table, or Json
+        - Object: Returns PowerShell objects for programmatic use
+        - Table: Displays formatted table to console
+        - Json: Returns JSON string
+
+    .EXAMPLE
+        Get-AwsSsoConfiguration
+
+        Returns all SSO sessions and profiles as objects
+
+    .EXAMPLE
+        Get-AwsSsoConfiguration -Format Table
+
+        Displays all SSO sessions and profiles in a formatted table
+
+    .EXAMPLE
+        Get-AwsSsoConfiguration -SessionName "sso-session-jdoe"
+
+        Returns only profiles using the specified SSO session
+
+    .EXAMPLE
+        Get-AwsSsoConfiguration -Format Json
+
+        Returns configuration as JSON for export or integration
+    #>
+
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$SessionName = "",
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet("Object", "Table", "Json")]
+        [string]$Format = "Object"
+    )
+
+    # Ensure cross-version compatibility
+    $isWindows = $PSVersionTable.Platform -eq 'Win32NT' -or $PSVersionTable.PSVersion.Major -le 5
+    if ($PSVersionTable.PSVersion.Major -le 5) {
+        $isWindows = $true
+    }
+
+    try {
+        # Determine AWS config path
+        if ($isWindows) {
+            $awsConfigDir = Join-Path $env:USERPROFILE ".aws"
+        }
+        else {
+            $awsConfigDir = Join-Path $env:HOME ".aws"
+        }
+
+        $awsConfigPath = Join-Path $awsConfigDir "config"
+
+        # Check if config file exists
+        if (-not (Test-Path $awsConfigPath)) {
+            Write-Warning "AWS config file not found at: $awsConfigPath"
+            Write-Host "Run Set-AwsSsoConfiguration to create your first configuration." -ForegroundColor Yellow
+            return $null
+        }
+
+        # Check if file is readable
+        try {
+            $configContent = Get-Content $awsConfigPath -Raw -ErrorAction Stop
+        }
+        catch [System.UnauthorizedAccessException] {
+            Write-Error "Permission denied: Cannot read $awsConfigPath"
+            Write-Error "Check file permissions and try again."
+            return $null
+        }
+        catch {
+            Write-Error "Failed to read config file: $_"
+            return $null
+        }
+
+        # Check if file is empty
+        if ([string]::IsNullOrWhiteSpace($configContent)) {
+            Write-Warning "AWS config file is empty: $awsConfigPath"
+            return $null
+        }
+
+        # Parse the config file
+        $parsedConfig = Parse-AwsConfig -ConfigContent $configContent
+
+        if (-not $parsedConfig) {
+            Write-Warning "No valid configuration found in $awsConfigPath"
+            return $null
+        }
+
+        # Filter by session name if specified
+        if ($SessionName) {
+            $parsedConfig.Profiles = $parsedConfig.Profiles | Where-Object {
+                $_.SsoSession -eq $SessionName
+            }
+
+            $parsedConfig.Sessions = $parsedConfig.Sessions | Where-Object {
+                $_.Name -eq $SessionName
+            }
+
+            if ($parsedConfig.Sessions.Count -eq 0) {
+                Write-Warning "SSO session not found: $SessionName"
+                return $null
+            }
+        }
+
+        # Return based on format
+        switch ($Format) {
+            "Table" {
+                Show-SsoConfigTable -Config $parsedConfig
+                return
+            }
+            "Json" {
+                return ($parsedConfig | ConvertTo-Json -Depth 10)
+            }
+            default {
+                return $parsedConfig
+            }
+        }
+    }
+    catch {
+        Write-Error "Failed to retrieve AWS SSO configuration: $_"
+        Write-Error $_.Exception.Message
+        if ($_.Exception.InnerException) {
+            Write-Error "Inner Exception: $($_.Exception.InnerException.Message)"
+        }
+        return $null
+    }
+}
+
+function Parse-AwsConfig {
+    param(
+        [string]$ConfigContent
+    )
+
+    try {
+        $sessions = @()
+        $profiles = @()
+
+        # Split content into lines
+        $lines = $ConfigContent -split "`r?`n"
+
+        $currentSection = $null
+        $currentSectionData = @{}
+
+        foreach ($line in $lines) {
+            # Trim whitespace
+            $line = $line.Trim()
+
+            # Skip empty lines and comments
+            if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#') -or $line.StartsWith(';')) {
+                continue
+            }
+
+            # Check for section header
+            if ($line -match '^\[(.+)\]$') {
+                # Save previous section if exists
+                if ($currentSection) {
+                    Save-ConfigSection -SectionName $currentSection -SectionData $currentSectionData -Sessions ([ref]$sessions) -Profiles ([ref]$profiles)
+                }
+
+                # Start new section
+                $currentSection = $matches[1]
+                $currentSectionData = @{}
+            }
+            # Parse key-value pair
+            elseif ($line -match '^([^=]+)=(.*)$') {
+                $key = $matches[1].Trim()
+                $value = $matches[2].Trim()
+                $currentSectionData[$key] = $value
+            }
+        }
+
+        # Save last section
+        if ($currentSection) {
+            Save-ConfigSection -SectionName $currentSection -SectionData $currentSectionData -Sessions ([ref]$sessions) -Profiles ([ref]$profiles)
+        }
+
+        return @{
+            ConfigPath = (Get-AwsConfigPath)
+            Sessions = $sessions
+            Profiles = $profiles
+            TotalSessions = $sessions.Count
+            TotalProfiles = $profiles.Count
+        }
+    }
+    catch {
+        Write-Error "Failed to parse AWS config: $_"
+        return $null
+    }
+}
+
+function Save-ConfigSection {
+    param(
+        [string]$SectionName,
+        [hashtable]$SectionData,
+        [ref]$Sessions,
+        [ref]$Profiles
+    )
+
+    try {
+        # SSO Session
+        if ($SectionName -match '^sso-session\s+(.+)$') {
+            $sessionName = $matches[1].Trim()
+
+            $session = [PSCustomObject]@{
+                Name = $sessionName
+                SsoStartUrl = $SectionData['sso_start_url']
+                SsoRegion = $SectionData['sso_region']
+                SsoRegistrationScopes = $SectionData['sso_registration_scopes']
+            }
+
+            $Sessions.Value += $session
+        }
+        # Profile (with or without SSO)
+        elseif ($SectionName -match '^profile\s+(.+)$') {
+            $profileName = $matches[1].Trim()
+
+            # Check if it's an SSO profile
+            $isSsoProfile = $SectionData.ContainsKey('sso_session') -or
+                           $SectionData.ContainsKey('sso_start_url') -or
+                           $SectionData.ContainsKey('sso_account_id')
+
+            if ($isSsoProfile) {
+                $profile = [PSCustomObject]@{
+                    ProfileName = $profileName
+                    SsoSession = $SectionData['sso_session']
+                    SsoStartUrl = $SectionData['sso_start_url']
+                    SsoRegion = $SectionData['sso_region']
+                    SsoAccountId = $SectionData['sso_account_id']
+                    SsoRoleName = $SectionData['sso_role_name']
+                    Region = $SectionData['region']
+                    Output = $SectionData['output']
+                    Type = if ($SectionData['sso_session']) { "Modern" } else { "Legacy" }
+                }
+
+                $Profiles.Value += $profile
+            }
+        }
+        # Default profile (no "profile" prefix)
+        elseif ($SectionName -eq 'default') {
+            $isSsoProfile = $SectionData.ContainsKey('sso_session') -or
+                           $SectionData.ContainsKey('sso_start_url') -or
+                           $SectionData.ContainsKey('sso_account_id')
+
+            if ($isSsoProfile) {
+                $profile = [PSCustomObject]@{
+                    ProfileName = 'default'
+                    SsoSession = $SectionData['sso_session']
+                    SsoStartUrl = $SectionData['sso_start_url']
+                    SsoRegion = $SectionData['sso_region']
+                    SsoAccountId = $SectionData['sso_account_id']
+                    SsoRoleName = $SectionData['sso_role_name']
+                    Region = $SectionData['region']
+                    Output = $SectionData['output']
+                    Type = if ($SectionData['sso_session']) { "Modern" } else { "Legacy" }
+                }
+
+                $Profiles.Value += $profile
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Error saving section $SectionName: $_"
+    }
+}
+
+function Show-SsoConfigTable {
+    param(
+        [hashtable]$Config
+    )
+
+    Write-Host ""
+    Write-Host "AWS SSO Configuration" -ForegroundColor Cyan
+    Write-Host "=====================" -ForegroundColor Cyan
+    Write-Host "Config File: $($Config.ConfigPath)" -ForegroundColor Gray
+    Write-Host ""
+
+    # Display SSO Sessions
+    if ($Config.Sessions.Count -gt 0) {
+        Write-Host "SSO Sessions ($($Config.Sessions.Count)):" -ForegroundColor Yellow
+        Write-Host ""
+
+        foreach ($session in $Config.Sessions) {
+            Write-Host "  Session: $($session.Name)" -ForegroundColor White
+            Write-Host "    Start URL: $($session.SsoStartUrl)" -ForegroundColor Gray
+            Write-Host "    Region: $($session.SsoRegion)" -ForegroundColor Gray
+            if ($session.SsoRegistrationScopes) {
+                Write-Host "    Scopes: $($session.SsoRegistrationScopes)" -ForegroundColor Gray
+            }
+
+            # Count profiles using this session
+            $profileCount = ($Config.Profiles | Where-Object { $_.SsoSession -eq $session.Name }).Count
+            Write-Host "    Profiles: $profileCount" -ForegroundColor Gray
+            Write-Host ""
+        }
+    }
+    else {
+        Write-Host "No SSO sessions found." -ForegroundColor Yellow
+        Write-Host ""
+    }
+
+    # Display SSO Profiles
+    if ($Config.Profiles.Count -gt 0) {
+        Write-Host "SSO Profiles ($($Config.Profiles.Count)):" -ForegroundColor Yellow
+        Write-Host ""
+
+        # Group by session for better readability
+        $groupedProfiles = $Config.Profiles | Group-Object -Property SsoSession
+
+        foreach ($group in $groupedProfiles) {
+            $sessionName = if ($group.Name) { $group.Name } else { "Legacy (no session)" }
+            Write-Host "  Session: $sessionName" -ForegroundColor Cyan
+
+            foreach ($profile in $group.Group) {
+                Write-Host "    Profile: $($profile.ProfileName)" -ForegroundColor White
+                Write-Host "      Account: $($profile.SsoAccountId)" -ForegroundColor Gray
+                Write-Host "      Role: $($profile.SsoRoleName)" -ForegroundColor Gray
+                Write-Host "      Region: $($profile.Region)" -ForegroundColor Gray
+                Write-Host "      Type: $($profile.Type)" -ForegroundColor Gray
+                Write-Host ""
+            }
+        }
+    }
+    else {
+        Write-Host "No SSO profiles found." -ForegroundColor Yellow
+        Write-Host ""
+    }
+
+    # Usage instructions
+    Write-Host "Usage:" -ForegroundColor Green
+    if ($Config.Sessions.Count -gt 0) {
+        $firstSession = $Config.Sessions[0].Name
+        Write-Host "  aws sso login --sso-session $firstSession" -ForegroundColor White
+    }
+    if ($Config.Profiles.Count -gt 0) {
+        $firstProfile = $Config.Profiles[0].ProfileName
+        Write-Host "  aws s3 ls --profile $firstProfile" -ForegroundColor White
+    }
+    Write-Host ""
+}
+
+function Get-AwsConfigPath {
+    $isWindows = $PSVersionTable.Platform -eq 'Win32NT' -or $PSVersionTable.PSVersion.Major -le 5
+    if ($PSVersionTable.PSVersion.Major -le 5) {
+        $isWindows = $true
+    }
+
+    if ($isWindows) {
+        $awsConfigDir = Join-Path $env:USERPROFILE ".aws"
+    }
+    else {
+        $awsConfigDir = Join-Path $env:HOME ".aws"
+    }
+
+    return (Join-Path $awsConfigDir "config")
+}
+
+Export-ModuleMember -Function Set-AwsSsoConfiguration, Get-AwsSsoConfiguration
