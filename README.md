@@ -4,10 +4,13 @@ A PowerShell module to configure AWS SSO (SAML) profiles with minimal user inter
 
 ## Features
 
+- **SSO Session Management**: Creates reusable SSO sessions that multiple profiles reference
+- **Automatic Session Naming**: Session named `sso-session-{username}` based on your SSO identity
 - **Device Authorization Flow**: Secure authentication using AWS SSO device authorization
 - **Automatic Discovery**: Retrieves all available AWS accounts and roles
 - **Interactive Selection**: Simple menu to select which profiles to configure
-- **AWS Config Format**: Writes profiles directly to `~/.aws/config`
+- **Flexible Profile Naming**: Multiple naming schemes (AccountRole, AccountIdRole, RoleAccount, Custom)
+- **AWS Config Format**: Writes profiles directly to `~/.aws/config` using modern SSO session format
 - **Cross-Platform**: Works on Windows, Linux, and macOS
 - **Dual Version Support**: Compatible with PowerShell 5.1 and 7+
 
@@ -60,6 +63,35 @@ Set-AwsSsoConfiguration `
     -DefaultRegion "eu-west-1"
 ```
 
+### With Different Profile Naming Schemes
+
+```powershell
+# Use AccountId-RoleName format (e.g., 123456789012-administrator)
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://my-sso-portal.awsapps.com/start" `
+    -ProfileNamingScheme "AccountIdRole"
+
+# Use RoleName-AccountName format (e.g., administrator-production)
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://my-sso-portal.awsapps.com/start" `
+    -ProfileNamingScheme "RoleAccount"
+
+# Custom template
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://my-sso-portal.awsapps.com/start" `
+    -ProfileNamingScheme "Custom" `
+    -ProfileNameTemplate "{Prefix}-{AccountId}-{RoleName}" `
+    -ProfilePrefix "acme"
+```
+
+### With Custom Session Name
+
+```powershell
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://my-sso-portal.awsapps.com/start" `
+    -SessionName "my-custom-session"
+```
+
 ## Workflow
 
 The function follows these steps:
@@ -68,9 +100,10 @@ The function follows these steps:
 2. **Device Authorization**: Generates a device code and user code
 3. **User Authentication**: Displays a URL for browser-based authentication
 4. **Token Retrieval**: Polls for access token after user authorizes
-5. **Account/Role Discovery**: Retrieves all available AWS accounts and roles
-6. **Interactive Selection**: Presents a menu to select desired profiles
-7. **Config Writing**: Writes selected profiles to `~/.aws/config`
+5. **User Identity**: Retrieves your username for session naming
+6. **Account/Role Discovery**: Retrieves all available AWS accounts and roles
+7. **Interactive Selection**: Presents a menu to select desired profiles
+8. **Config Writing**: Creates SSO session and writes profiles to `~/.aws/config`
 
 ## Interactive Selection
 
@@ -98,37 +131,121 @@ Selection: 1,3
 
 ## Generated Config Format
 
-The module writes profiles to `~/.aws/config` in this format:
+The module writes an SSO session and profiles to `~/.aws/config` in modern AWS CLI format:
 
 ```ini
-[profile mycompany-production-account-administrator]
+[sso-session sso-session-jdoe]
 sso_start_url = https://my-sso-portal.awsapps.com/start
 sso_region = us-east-1
+sso_registration_scopes = sso:account:access
+
+[profile mycompany-production-account-administrator]
+sso_session = sso-session-jdoe
 sso_account_id = 123456789012
 sso_role_name = Administrator
 region = us-east-1
 output = json
 
 [profile mycompany-development-account-developer]
-sso_start_url = https://my-sso-portal.awsapps.com/start
-sso_region = us-east-1
+sso_session = sso-session-jdoe
 sso_account_id = 987654321098
 sso_role_name = Developer
 region = us-east-1
 output = json
 ```
 
+**Key Benefits:**
+- Single SSO session shared by all profiles
+- Login once with `aws sso login --sso-session sso-session-jdoe`
+- All profiles using that session are authenticated
+- No need to login separately for each profile
+
 ## Using Configured Profiles
 
 After configuration, use AWS CLI with your new profiles:
 
 ```bash
-# Login to SSO
-aws sso login --profile mycompany-production-account-administrator
+# Login to SSO session (authenticates ALL profiles using this session)
+aws sso login --sso-session sso-session-jdoe
 
-# Use the profile
+# Use any profile - already authenticated!
 aws s3 ls --profile mycompany-production-account-administrator
-aws ec2 describe-instances --profile mycompany-production-account-administrator
+aws ec2 describe-instances --profile mycompany-development-account-developer
+
+# You can also login using a specific profile
+aws sso login --profile mycompany-production-account-administrator
+```
+
+## SSO Session Benefits
+
+The module uses AWS CLI's modern SSO session feature, which provides several advantages:
+
+1. **Single Authentication**: Login once to authenticate all profiles sharing the session
+2. **Better Token Management**: AWS CLI handles token refresh automatically
+3. **Simplified Workflow**: No need to remember which profile you're using
+4. **Multiple SSO Portals**: Create different sessions for different organizations
+
+### Working with Multiple SSO Portals
+
+If you work with multiple AWS organizations:
+
+```powershell
+# Configure Company A profiles
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://companyA.awsapps.com/start" `
+    -ProfilePrefix "companyA" `
+    -SessionName "companya-session"
+
+# Configure Company B profiles
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://companyB.awsapps.com/start" `
+    -ProfilePrefix "companyB" `
+    -SessionName "companyb-session"
+```
+
+Then login to each organization separately:
+```bash
+aws sso login --sso-session companya-session
+aws sso login --sso-session companyb-session
+```
+
+## Profile Naming Schemes
+
+Choose the naming scheme that works best for your workflow:
+
+### AccountRole (Default)
+Best for: Human-readable profile names
+```
+production-administrator
+development-readonly
+staging-developer
+```
+
+### AccountIdRole
+Best for: When account names are ambiguous or change
+```
+123456789012-administrator
+987654321098-readonly
+555666777888-developer
+```
+
+### RoleAccount
+Best for: When you primarily switch between roles
+```
+administrator-production
+readonly-development
+developer-staging
+```
+
+### Custom
+Best for: Specific organizational standards
+```powershell
+# Example: Prefix-AccountId-Role format
+-ProfileNamingScheme "Custom" `
+-ProfileNameTemplate "{Prefix}-{AccountId}-{RoleName}" `
+-ProfilePrefix "acme"
+
+# Results in: acme-123456789012-administrator
 ```
 
 ## Parameters
@@ -141,11 +258,38 @@ Example: `https://my-sso-portal.awsapps.com/start`
 ### `-SsoRegion` (Optional)
 AWS region where SSO is configured. Default: `us-east-1`
 
+### `-ProfileNamingScheme` (Optional)
+Profile naming format. Default: `AccountRole`
+
+Options:
+- **AccountRole**: `account-name-role-name` (e.g., `production-administrator`)
+- **AccountIdRole**: `123456789012-role-name` (e.g., `123456789012-administrator`)
+- **RoleAccount**: `role-name-account-name` (e.g., `administrator-production`)
+- **Custom**: Use `-ProfileNameTemplate` to define your own format
+
+### `-ProfileNameTemplate` (Optional)
+Custom template for profile names (use with `-ProfileNamingScheme Custom`)
+
+Available placeholders:
+- `{AccountName}`: AWS account name
+- `{AccountId}`: AWS account ID (12 digits)
+- `{RoleName}`: IAM role name
+- `{Prefix}`: Value from `-ProfilePrefix`
+
+Example: `"{Prefix}-{AccountId}-{RoleName}"` → `acme-123456789012-administrator`
+
 ### `-ProfilePrefix` (Optional)
-Prefix to add to profile names for organization. Default: none
+Prefix to add to profile names. Default: none
+
+Example: `mycompany` → `mycompany-production-administrator`
 
 ### `-DefaultRegion` (Optional)
 Default AWS region for all profiles. Default: `us-east-1`
+
+### `-SessionName` (Optional)
+Custom SSO session name. Default: `sso-session-{username}`
+
+Example: `my-team-session`
 
 ## Compatibility Notes
 
@@ -193,37 +337,67 @@ The module skips profiles that already exist in your config. To recreate a profi
 # Import module
 Import-Module ./AwsSsoConfig.psd1
 
-# Run configuration
+# Run configuration with defaults
 Set-AwsSsoConfiguration -SsoStartUrl "https://d-1234567890.awsapps.com/start"
 
 # Follow prompts to authorize and select roles
+# Creates: sso-session-{your-username}
+# Profiles: account-name-role-name format
 ```
 
-### Example 2: Multi-Region Organization
+### Example 2: Organization with Account ID Naming
 
 ```powershell
-# Configure with custom settings
+# Use account IDs in profile names for clarity
 Set-AwsSsoConfiguration `
     -SsoStartUrl "https://mycompany.awsapps.com/start" `
-    -SsoRegion "eu-west-1" `
-    -ProfilePrefix "acme" `
-    -DefaultRegion "eu-west-1"
+    -ProfileNamingScheme "AccountIdRole" `
+    -ProfilePrefix "acme"
 
-# Results in profiles like: acme-production-administrator
+# Results in: acme-123456789012-administrator
 ```
 
-### Example 3: Multiple Environments
+### Example 3: Multiple Organizations
 
 ```powershell
-# Configure production profiles
+# Configure Company A (production)
 Set-AwsSsoConfiguration `
-    -SsoStartUrl "https://prod.awsapps.com/start" `
-    -ProfilePrefix "prod"
+    -SsoStartUrl "https://companyA.awsapps.com/start" `
+    -SessionName "companya-session" `
+    -ProfilePrefix "companyA"
 
-# Configure development profiles
+# Configure Company B (consulting client)
 Set-AwsSsoConfiguration `
-    -SsoStartUrl "https://dev.awsapps.com/start" `
-    -ProfilePrefix "dev"
+    -SsoStartUrl "https://companyB.awsapps.com/start" `
+    -SessionName "companyb-session" `
+    -ProfilePrefix "companyB"
+
+# Login to each separately
+aws sso login --sso-session companya-session
+aws sso login --sso-session companyb-session
+```
+
+### Example 4: Custom Profile Naming
+
+```powershell
+# Custom format: environment-accountid-role
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://mycompany.awsapps.com/start" `
+    -ProfileNamingScheme "Custom" `
+    -ProfileNameTemplate "prod-{AccountId}-{RoleName}"
+
+# Results in: prod-123456789012-administrator
+```
+
+### Example 5: Multi-Region Setup
+
+```powershell
+# Configure EU organization with custom defaults
+Set-AwsSsoConfiguration `
+    -SsoStartUrl "https://eu.awsapps.com/start" `
+    -SsoRegion "eu-west-1" `
+    -DefaultRegion "eu-west-1" `
+    -ProfilePrefix "eu"
 ```
 
 ## Security Considerations
@@ -239,7 +413,7 @@ Set-AwsSsoConfiguration `
 - Cannot be fully tested without AWS SSO access
 - Requires browser access for authentication (no headless support)
 - AWS SSO portal APIs may vary by AWS version
-- Profile names are auto-generated (manual editing of config supported)
+- Requires AWS CLI v2.9.0+ for full SSO session support
 
 ## License
 

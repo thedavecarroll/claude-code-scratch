@@ -18,17 +18,38 @@ function Set-AwsSsoConfiguration {
     .PARAMETER SsoRegion
         The AWS region where SSO is configured (default: us-east-1)
 
+    .PARAMETER ProfileNamingScheme
+        Profile naming scheme. Options:
+        - "AccountRole" (default): account-name-role-name
+        - "AccountIdRole": 123456789012-role-name
+        - "RoleAccount": role-name-account-name
+        - "Custom": Use ProfileNameTemplate parameter
+
+    .PARAMETER ProfileNameTemplate
+        Custom template for profile names. Use placeholders:
+        {AccountName}, {AccountId}, {RoleName}, {Prefix}
+        Example: "{Prefix}-{AccountId}-{RoleName}"
+
     .PARAMETER ProfilePrefix
         Optional prefix for profile names (default: none)
 
     .PARAMETER DefaultRegion
         Default AWS region for profiles (default: us-east-1)
 
+    .PARAMETER SessionName
+        Optional custom SSO session name. Default: sso-session-{username}
+
     .EXAMPLE
         Set-AwsSsoConfiguration -SsoStartUrl "https://my-sso-portal.awsapps.com/start"
 
     .EXAMPLE
         Set-AwsSsoConfiguration -SsoStartUrl "https://my-sso-portal.awsapps.com/start" -ProfilePrefix "company" -DefaultRegion "us-west-2"
+
+    .EXAMPLE
+        Set-AwsSsoConfiguration -SsoStartUrl "https://my-sso-portal.awsapps.com/start" -ProfileNamingScheme "AccountIdRole"
+
+    .EXAMPLE
+        Set-AwsSsoConfiguration -SsoStartUrl "https://my-sso-portal.awsapps.com/start" -ProfileNamingScheme "Custom" -ProfileNameTemplate "{AccountId}-{RoleName}"
     #>
 
     [CmdletBinding()]
@@ -41,10 +62,20 @@ function Set-AwsSsoConfiguration {
         [string]$SsoRegion = "us-east-1",
 
         [Parameter(Mandatory = $false)]
+        [ValidateSet("AccountRole", "AccountIdRole", "RoleAccount", "Custom")]
+        [string]$ProfileNamingScheme = "AccountRole",
+
+        [Parameter(Mandatory = $false)]
+        [string]$ProfileNameTemplate = "",
+
+        [Parameter(Mandatory = $false)]
         [string]$ProfilePrefix = "",
 
         [Parameter(Mandatory = $false)]
-        [string]$DefaultRegion = "us-east-1"
+        [string]$DefaultRegion = "us-east-1",
+
+        [Parameter(Mandatory = $false)]
+        [string]$SessionName = ""
     )
 
     # Ensure cross-version compatibility
@@ -83,8 +114,12 @@ function Set-AwsSsoConfiguration {
         Write-Host "Authorization successful!" -ForegroundColor Green
         Write-Host ""
 
-        # Step 4: Get accounts and roles
-        Write-Host "[3/5] Retrieving available accounts and roles..." -ForegroundColor Yellow
+        # Step 4: Get user identity for session naming
+        Write-Host "[3/6] Retrieving user identity..." -ForegroundColor Yellow
+        $userIdentity = Get-SsoUserIdentity -AccessToken $accessToken -SsoRegion $SsoRegion
+
+        # Step 5: Get accounts and roles
+        Write-Host "[4/6] Retrieving available accounts and roles..." -ForegroundColor Yellow
         $accountsAndRoles = Get-SsoAccountsAndRoles -AccessToken $accessToken -SsoRegion $SsoRegion
 
         if ($accountsAndRoles.Count -eq 0) {
@@ -92,8 +127,8 @@ function Set-AwsSsoConfiguration {
             return
         }
 
-        # Step 5: Let user select roles
-        Write-Host "[4/5] Available accounts and roles:" -ForegroundColor Yellow
+        # Step 6: Let user select roles
+        Write-Host "[5/6] Available accounts and roles:" -ForegroundColor Yellow
         $selectedRoles = Show-RoleSelectionMenu -AccountsAndRoles $accountsAndRoles
 
         if ($selectedRoles.Count -eq 0) {
@@ -101,15 +136,31 @@ function Set-AwsSsoConfiguration {
             return
         }
 
-        # Step 6: Write to AWS config
-        Write-Host "[5/5] Writing configuration to AWS config file..." -ForegroundColor Yellow
-        Write-AwsConfig -SelectedRoles $selectedRoles -SsoStartUrl $SsoStartUrl -SsoRegion $SsoRegion -ProfilePrefix $ProfilePrefix -DefaultRegion $DefaultRegion
+        # Determine session name
+        $finalSessionName = if ($SessionName) {
+            $SessionName
+        } else {
+            "sso-session-$($userIdentity.Username)"
+        }
+
+        # Step 7: Write to AWS config
+        Write-Host "[6/6] Writing configuration to AWS config file..." -ForegroundColor Yellow
+        Write-AwsConfig -SelectedRoles $selectedRoles `
+                       -SsoStartUrl $SsoStartUrl `
+                       -SsoRegion $SsoRegion `
+                       -SessionName $finalSessionName `
+                       -ProfileNamingScheme $ProfileNamingScheme `
+                       -ProfileNameTemplate $ProfileNameTemplate `
+                       -ProfilePrefix $ProfilePrefix `
+                       -DefaultRegion $DefaultRegion
 
         Write-Host ""
-        Write-Host "Configuration complete! Created $($selectedRoles.Count) profile(s)." -ForegroundColor Green
+        Write-Host "Configuration complete!" -ForegroundColor Green
+        Write-Host "  SSO Session: $finalSessionName" -ForegroundColor Cyan
+        Write-Host "  Profiles Created: $($selectedRoles.Count)" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "To use a profile, run:" -ForegroundColor Cyan
-        Write-Host "  aws sso login --profile <profile-name>" -ForegroundColor White
+        Write-Host "To use your profiles:" -ForegroundColor Yellow
+        Write-Host "  aws sso login --sso-session $finalSessionName" -ForegroundColor White
         Write-Host "  aws s3 ls --profile <profile-name>" -ForegroundColor White
 
     }
@@ -295,6 +346,48 @@ function Get-SsoAccountsAndRoles {
     return $allRoles
 }
 
+function Get-SsoUserIdentity {
+    param(
+        [string]$AccessToken,
+        [string]$SsoRegion
+    )
+
+    $endpoint = "https://portal.sso.$SsoRegion.amazonaws.com/user"
+
+    $headers = @{
+        "x-amz-sso_bearer_token" = $AccessToken
+    }
+
+    try {
+        $response = Invoke-RestMethodCompat -Uri $endpoint -Method Get -Headers $headers
+
+        $username = if ($response.userName) {
+            $response.userName
+        } elseif ($response.emailAddress) {
+            ($response.emailAddress -split '@')[0]
+        } else {
+            "user"
+        }
+
+        # Sanitize username for use in config
+        $username = $username.ToLower() -replace '[^a-z0-9-]', '-'
+
+        return @{
+            Username = $username
+            Email = $response.emailAddress
+            DisplayName = $response.displayName
+        }
+    }
+    catch {
+        Write-Verbose "Could not retrieve user identity, using default session name"
+        return @{
+            Username = "default"
+            Email = ""
+            DisplayName = ""
+        }
+    }
+}
+
 function Show-RoleSelectionMenu {
     param(
         [array]$AccountsAndRoles
@@ -363,6 +456,9 @@ function Write-AwsConfig {
         [array]$SelectedRoles,
         [string]$SsoStartUrl,
         [string]$SsoRegion,
+        [string]$SessionName,
+        [string]$ProfileNamingScheme,
+        [string]$ProfileNameTemplate,
         [string]$ProfilePrefix,
         [string]$DefaultRegion
     )
@@ -388,22 +484,35 @@ function Write-AwsConfig {
         $existingConfig = Get-Content $awsConfigPath -Raw
     }
 
+    # Create SSO session if it doesn't exist
+    $sessionConfig = ""
+    if ($existingConfig -notmatch "\[sso-session $SessionName\]") {
+        $sessionConfig = @"
+
+[sso-session $SessionName]
+sso_start_url = $SsoStartUrl
+sso_region = $SsoRegion
+sso_registration_scopes = sso:account:access
+"@
+        Write-Host "  Added SSO session: $SessionName" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  SSO session already exists: $SessionName" -ForegroundColor Yellow
+    }
+
     # Generate new profiles
     $newProfiles = @()
 
     foreach ($role in $SelectedRoles) {
-        $profileName = if ($ProfilePrefix) {
-            "$ProfilePrefix-$($role.AccountName)-$($role.RoleName)".ToLower() -replace '\s+', '-'
-        }
-        else {
-            "$($role.AccountName)-$($role.RoleName)".ToLower() -replace '\s+', '-'
-        }
+        $profileName = Get-ProfileName -Role $role `
+                                       -Scheme $ProfileNamingScheme `
+                                       -Template $ProfileNameTemplate `
+                                       -Prefix $ProfilePrefix
 
         $profileConfig = @"
 
 [profile $profileName]
-sso_start_url = $SsoStartUrl
-sso_region = $SsoRegion
+sso_session = $SessionName
 sso_account_id = $($role.AccountId)
 sso_role_name = $($role.RoleName)
 region = $DefaultRegion
@@ -420,16 +529,82 @@ output = json
         }
     }
 
-    # Append new profiles to config
+    # Append session and profiles to config
+    $configToAdd = @()
+    if ($sessionConfig) {
+        $configToAdd += $sessionConfig
+    }
     if ($newProfiles.Count -gt 0) {
-        Add-Content -Path $awsConfigPath -Value ($newProfiles -join "`n") -NoNewline
+        $configToAdd += $newProfiles
+    }
+
+    if ($configToAdd.Count -gt 0) {
+        Add-Content -Path $awsConfigPath -Value ($configToAdd -join "`n") -NoNewline
         Write-Host ""
         Write-Host "Configuration written to: $awsConfigPath" -ForegroundColor Green
     }
     else {
         Write-Host ""
-        Write-Host "No new profiles to add." -ForegroundColor Yellow
+        Write-Host "No new configuration to add." -ForegroundColor Yellow
     }
+}
+
+function Get-ProfileName {
+    param(
+        [hashtable]$Role,
+        [string]$Scheme,
+        [string]$Template,
+        [string]$Prefix
+    )
+
+    # Sanitize components
+    $accountName = $Role.AccountName.ToLower() -replace '\s+', '-' -replace '[^a-z0-9-]', ''
+    $accountId = $Role.AccountId
+    $roleName = $Role.RoleName.ToLower() -replace '\s+', '-' -replace '[^a-z0-9-]', ''
+
+    $profileName = switch ($Scheme) {
+        "AccountRole" {
+            if ($Prefix) {
+                "$Prefix-$accountName-$roleName"
+            } else {
+                "$accountName-$roleName"
+            }
+        }
+        "AccountIdRole" {
+            if ($Prefix) {
+                "$Prefix-$accountId-$roleName"
+            } else {
+                "$accountId-$roleName"
+            }
+        }
+        "RoleAccount" {
+            if ($Prefix) {
+                "$Prefix-$roleName-$accountName"
+            } else {
+                "$roleName-$accountName"
+            }
+        }
+        "Custom" {
+            if (-not $Template) {
+                throw "ProfileNameTemplate is required when using Custom naming scheme"
+            }
+            $name = $Template
+            $name = $name -replace '\{AccountName\}', $accountName
+            $name = $name -replace '\{AccountId\}', $accountId
+            $name = $name -replace '\{RoleName\}', $roleName
+            $name = $name -replace '\{Prefix\}', $Prefix
+            $name.ToLower()
+        }
+        default {
+            if ($Prefix) {
+                "$Prefix-$accountName-$roleName"
+            } else {
+                "$accountName-$roleName"
+            }
+        }
+    }
+
+    return $profileName
 }
 
 function Invoke-RestMethodCompat {
