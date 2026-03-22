@@ -19,8 +19,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
+Import-Module -Name "$PSScriptRoot\Scripts\packer-logging.psm1" -Force
+Import-Module -Name "$PSScriptRoot\Scripts\packer-install-helper.psm1" -Force
 
 $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 

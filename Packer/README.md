@@ -12,22 +12,23 @@ All scripts share a consistent logging pattern: transcript capture, structured l
 
 ```
 Packer/
-├── Logs/                          Transcript output (git-ignored)
-├── Scripts/                       Additional utility scripts
-├── packer-logging.psm1            Shared module: transcript and structured logging
-├── packer-install-helper.psm1     Shared module: MSI/EXE install, download, registry checks
-├── initialize.ps1                 System preparation and defaults
-├── download-installers.ps1        Download installer packages to staging
-├── install-from-manifest.ps1      Install software from a JSON manifest
-├── install-chef-client.ps1        Install Chef Infra Client
-├── run-chef-client.ps1            Execute Chef client with a run list
-├── install-crowdstrike.ps1        Install CrowdStrike Falcon sensor
-├── config-bginfo.ps1              Configure BGInfo desktop display
-├── secure-iis.ps1                 Harden IIS (TLS, ciphers, defaults)
-├── secure-ntlm.ps1               Restrict NTLM, enforce NTLMv2
-├── winrm-bootstrap.ps1            Configure WinRM HTTPS for Packer
-├── finalize.ps1                   Cleanup, DISM, and optional sysprep
-└── .gitignore                     Excludes log artifacts
+├── Logs/                              Transcript output (git-ignored)
+├── Scripts/                           Provisioner scripts and shared modules
+│   ├── packer-logging.psm1            Shared module: transcript and structured logging
+│   ├── packer-install-helper.psm1     Shared module: MSI/EXE install, download, registry checks
+│   ├── initialize.ps1                 System preparation and defaults
+│   ├── download-installers.ps1        Download installer packages to staging
+│   ├── install-from-manifest.ps1      Install software from a JSON manifest
+│   ├── install-chef-client.ps1        Install Chef Infra Client
+│   ├── run-chef-client.ps1            Execute Chef client with a run list
+│   ├── install-crowdstrike.ps1        Install CrowdStrike Falcon sensor
+│   ├── config-bginfo.ps1              Configure BGInfo desktop display
+│   ├── secure-iis.ps1                 Harden IIS (TLS, ciphers, defaults)
+│   ├── secure-ntlm.ps1               Restrict NTLM, enforce NTLMv2
+│   └── finalize.ps1                   Cleanup, DISM, and optional sysprep
+├── winrm-bootstrap.ps1                Configure WinRM HTTPS for Packer
+├── README.md
+└── .gitignore                         Excludes log artifacts
 ```
 
 ## Prerequisites
@@ -91,7 +92,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
-Import-Module "$PSScriptRoot\packer-logging.psm1" -Force
+Import-Module "$PSScriptRoot\packer-logging.psm1" -Force        # Scripts are co-located with modules
 Import-Module "$PSScriptRoot\packer-install-helper.psm1" -Force
 
 $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
@@ -124,7 +125,7 @@ After a full build, `packer-build-logs.zip` contains all provisioner transcripts
 
 ## Adding a New Provisioner
 
-1. Copy an existing script (e.g., `initialize.ps1`) as a template
+1. Copy an existing script (e.g., `Scripts/initialize.ps1`) as a template
 2. Update the comment-based help (`.SYNOPSIS`, `.DESCRIPTION`)
 3. Replace the provisioner logic section with your implementation
 4. Add the script to your Packer template in the appropriate order
@@ -138,17 +139,17 @@ build {
 
   provisioner "powershell" {
     scripts = [
-      "Packer/initialize.ps1",
+      "Packer/Scripts/initialize.ps1",
       "Packer/winrm-bootstrap.ps1",
-      "Packer/download-installers.ps1",
-      "Packer/install-from-manifest.ps1",
-      "Packer/install-chef-client.ps1",
-      "Packer/run-chef-client.ps1",
-      "Packer/install-crowdstrike.ps1",
-      "Packer/config-bginfo.ps1",
-      "Packer/secure-iis.ps1",
-      "Packer/secure-ntlm.ps1",
-      "Packer/finalize.ps1",
+      "Packer/Scripts/download-installers.ps1",
+      "Packer/Scripts/install-from-manifest.ps1",
+      "Packer/Scripts/install-chef-client.ps1",
+      "Packer/Scripts/run-chef-client.ps1",
+      "Packer/Scripts/install-crowdstrike.ps1",
+      "Packer/Scripts/config-bginfo.ps1",
+      "Packer/Scripts/secure-iis.ps1",
+      "Packer/Scripts/secure-ntlm.ps1",
+      "Packer/Scripts/finalize.ps1",
     ]
   }
 }

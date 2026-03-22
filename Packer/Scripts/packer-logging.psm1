@@ -40,7 +40,7 @@ function Start-PackerTranscript {
         [string]$ScriptName,
 
         [Parameter()]
-        [string]$LogDirectory = "$PSScriptRoot\Logs"
+        [string]$LogDirectory = "$PSScriptRoot\..\Logs"
     )
 
     if (-not (Test-Path -Path $LogDirectory)) {
@@ -112,7 +112,7 @@ function Add-LogToArchive {
         [string]$LogPath,
 
         [Parameter()]
-        [string]$ArchivePath = "$PSScriptRoot\Logs\packer-build-logs.zip"
+        [string]$ArchivePath = "$PSScriptRoot\..\Logs\packer-build-logs.zip"
     )
 
     if (-not (Test-Path -Path $LogPath)) {
