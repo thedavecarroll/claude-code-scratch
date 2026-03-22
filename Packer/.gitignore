@@ -1,0 +1,6 @@
+# Transcript log files (generated at build time)
+Logs/*.log
+Logs/*.zip
+
+# Keep the Logs directory
+!Logs/.gitkeep
