@@ -1,77 +1,59 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Initializes the Windows environment for a Packer build.
-
+    Initializes the Packer build environment on the guest instance.
 .DESCRIPTION
-    Prepares the system for image building by disabling Windows Update,
-    configuring power settings to prevent sleep, setting the PowerShell
-    execution policy, and creating temporary working directories.
-
-    This script should run first in the Packer provisioner chain.
-
+    Creates the Packer log directory, imports packer-logging, starts a transcript, prints
+    build-config values, and calls Get-EC2LaunchInfo to verify EC2Launch v2. Must run first
+    after guest files and build-config.json are uploaded.
 .NOTES
-    File Name  : initialize.ps1
-    Runs As    : Administrator (via Packer provisioner)
-    Requires   : PowerShell 5.1+
-#>
+    Config: Reads C:\Packer\Config\build-config.json for LoggingModulePath (packer-logging.psm1)
+    and other keys. The JSON file is written by the Packer file provisioner.
 
+    Get-Help: This script has no parameters.
+.EXAMPLE
+    PS C:\> & 'C:\Packer\Scripts\initialize.ps1'
+#>
 [CmdletBinding()]
 param()
 
-$ErrorActionPreference = 'Stop'
+# Load build configuration from file
+$ConfigPath = 'C:\Packer\Config\build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
+    exit 1
+}
+$Config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
 
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
-
-$scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
-
+$TranscriptState = $null
 try {
-    $logPath = Start-PackerTranscript -ScriptName $scriptName
-    Write-PackerLog -Message "Starting $scriptName"
+    $ErrorActionPreference = "Stop"
+    Import-Module -Name $Config.LoggingModulePath -Force
+    New-PackerLogDirectory
 
-    # Disable Windows Update service to prevent interference during build
-    Write-PackerLog -Message "Disabling Windows Update service"
-    Stop-Service -Name 'wuauserv' -Force -ErrorAction SilentlyContinue
-    Set-Service -Name 'wuauserv' -StartupType Disabled
+    $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName "initialize.ps1"
 
-    # Configure power settings to prevent sleep during long builds
-    Write-PackerLog -Message "Configuring power settings"
-    & powercfg.exe /change monitor-timeout-ac 0
-    & powercfg.exe /change standby-timeout-ac 0
-    & powercfg.exe /change hibernate-timeout-ac 0
-
-    # Disable screensaver
-    Write-PackerLog -Message "Disabling screensaver"
-    Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'ScreenSaveActive' -Value '0' -Type String
-
-    # Set execution policy for the build
-    Write-PackerLog -Message "Setting PowerShell execution policy to RemoteSigned"
-    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
-
-    # Create temporary working directories
-    $stagingDirs = @(
-        'C:\PackerInstallers'
-        'C:\PackerTemp'
-        'C:\PackerScripts'
-    )
-
-    foreach ($dir in $stagingDirs) {
-        if (-not (Test-Path -Path $dir)) {
-            Write-PackerLog -Message "Creating directory: $dir"
-            New-Item -Path $dir -ItemType Directory -Force | Out-Null
-        }
+    Write-Output "--- Packer Build Configuration ---"
+    $Config.psobject.Properties | ForEach-Object {
+        Write-Output "$($_.Name) = $($_.Value)"
     }
+    Write-Output "------------------------------------"
+    Write-Output ""
 
-    Write-PackerLog -Message "Completed $scriptName successfully"
+    Write-Output "Initialization complete. Gathering EC2 launch information..."
+    Write-Output ""
+    $EC2LaunchInfo = Get-EC2LaunchInfo -ShowInfo
+    if ([version]$EC2LaunchInfo.AgentVersion -lt [version]'2.0.0') {
+        Write-Error "This build pipeline exclusively supports EC2Launch v2, but detected version '$($EC2LaunchInfo.AgentVersion)'."
+        exit 1
+    }
+    Write-Output ""
 }
 catch {
-    Write-PackerLog -Message "FAILED in ${scriptName}: $_" -Severity Error
-    throw
+    Write-DetailedError -ErrorRecord $_
+    exit 1
 }
 finally {
-    $transcriptFile = Stop-PackerTranscript
-    if ($transcriptFile) {
-        Add-LogToArchive -LogPath $transcriptFile
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
     }
 }

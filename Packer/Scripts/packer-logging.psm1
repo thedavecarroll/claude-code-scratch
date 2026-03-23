@@ -1,175 +1,363 @@
 <#
 .SYNOPSIS
-    Shared logging and transcript management module for Packer provisioner scripts.
-
+    Packer Windows build: config load, transcripts, EC2Launch info, and log helpers.
 .DESCRIPTION
-    Provides standardized transcript management and structured logging for Packer
-    provisioner scripts. Each provisioner imports this module to start/stop transcripts
-    and archive log files into a combined zip for post-build analysis.
-
-.NOTES
-    File Name  : packer-logging.psm1
-    Requires   : PowerShell 5.1+
+    Used by Packer provisioning scripts for build-config.json, transcript logging,
+    zip updates, detailed errors, and optional EC2Launch / Windows Update diagnostics.
 #>
 
-# Script-scoped state for tracking active transcript
-$script:TranscriptPath = $null
+$Script:PackerLogsPath = if ($env:LOGS_PATH) { $env:LOGS_PATH } else { 'C:\Packer\Logs' }
 
-function Start-PackerTranscript {
+#region Config Functions
+
+function Get-PackerBuildConfig {
     <#
     .SYNOPSIS
-        Starts a PowerShell transcript for a provisioner script.
-
+        Loads and returns the Packer build configuration from build-config.json.
     .DESCRIPTION
-        Creates a timestamped transcript log file in the Logs directory.
-        The transcript captures all console output for the duration of the provisioner run.
-
-    .PARAMETER ScriptName
-        The name of the calling provisioner script (without extension).
-
-    .PARAMETER LogDirectory
-        The directory where transcript files are written. Defaults to Logs under the module root.
-
-    .EXAMPLE
-        $logPath = Start-PackerTranscript -ScriptName 'initialize'
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$ScriptName,
-
-        [Parameter()]
-        [string]$LogDirectory = "$PSScriptRoot\..\Logs"
-    )
-
-    if (-not (Test-Path -Path $LogDirectory)) {
-        New-Item -Path $LogDirectory -ItemType Directory -Force | Out-Null
-    }
-
-    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $logFileName = "${ScriptName}_${timestamp}.log"
-    $script:TranscriptPath = Join-Path -Path $LogDirectory -ChildPath $logFileName
-
-    Start-Transcript -Path $script:TranscriptPath -Force | Out-Null
-    Write-Verbose "Transcript started: $($script:TranscriptPath)"
-
-    return $script:TranscriptPath
-}
-
-function Stop-PackerTranscript {
-    <#
-    .SYNOPSIS
-        Stops the active PowerShell transcript.
-
-    .DESCRIPTION
-        Safely stops the current transcript and returns the path to the log file.
-        Handles the case where no transcript is running without throwing an error.
-
-    .EXAMPLE
-        $logFile = Stop-PackerTranscript
+        Reads C:\Packer\Config\build-config.json (written by the Packer file provisioner)
+        and returns the configuration as a PSCustomObject.
     #>
     [CmdletBinding()]
     param()
 
-    $logFile = $script:TranscriptPath
-    $script:TranscriptPath = $null
-
-    try {
-        Stop-Transcript | Out-Null
-        Write-Verbose "Transcript stopped: $logFile"
+    $ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
+    if (-not (Test-Path $ConfigPath)) {
+        Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
+        exit 1
     }
-    catch {
-        Write-Verbose "No active transcript to stop."
-    }
-
-    return $logFile
+    return Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
 }
 
-function Add-LogToArchive {
+#endregion
+
+#region Logging Functions
+
+function Get-PackerLogsPath {
+    [CmdletBinding()]
+    param()
+    return $Script:PackerLogsPath
+}
+
+function Start-PackerTranscript {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.InvocationInfo]$Invocation,
+
+        [Parameter()]
+        [string]$OriginalScriptName,
+
+        [Parameter()]
+        [switch]$FailOnError
+    )
+
+    if ($OriginalScriptName) {
+        $ScriptName = $OriginalScriptName
+        $LogFileName = $OriginalScriptName
+    } else {
+        $ScriptName = $Invocation.MyCommand.Name
+        $LogFileName = $ScriptName
+    }
+
+    Write-Output ('Starting {0}' -f $ScriptName)
+
+    New-PackerLogDirectory
+    $LogDir = Get-PackerLogsPath
+
+    $TimingLogPath = Join-Path $LogDir 'script-timing.log'
+    $ZipPath = Join-Path (Split-Path $LogDir -Parent) 'packer-guest-logs.zip'
+
+    if (-not (Test-Path $ZipPath)) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::Open($ZipPath, 'Create').Dispose()
+    }
+
+    $TranscriptPath = Join-Path $LogDir -ChildPath "$($LogFileName)-$(Get-Date -Format 'yyyyMMddHHmmss').log"
+    try {
+        Start-Transcript -Path $TranscriptPath -Append -ErrorAction Stop
+    } catch {
+        $ErrorMsg = "Failed to start transcript: $($_.Exception.Message)"
+        Write-Warning $ErrorMsg
+        if ($FailOnError) {
+            Write-Error "Transcript logging is required for this script. Exiting."
+            exit 1
+        }
+    }
+
+    try {
+        $StartTime = (Get-Date).ToUniversalTime()
+        "START: $ScriptName at $($StartTime.ToString('u'))" | Out-File -FilePath $TimingLogPath -Append -Encoding utf8 -ErrorAction Stop
+    } catch {
+        $ErrorMsg = "Failed to write timing log: $($_.Exception.Message)"
+        Write-Warning $ErrorMsg
+        $StartTime = (Get-Date).ToUniversalTime()
+        if ($FailOnError) {
+            Write-Error "Timing log is required for this script. Exiting."
+            exit 1
+        }
+    }
+
+    return [PSCustomObject]@{
+        StartTime      = $StartTime
+        ScriptName     = $ScriptName
+        TimingLogPath  = $TimingLogPath
+        TranscriptPath = $TranscriptPath
+        ZipPath        = $ZipPath
+        FailOnError    = $FailOnError.IsPresent
+    }
+}
+
+function Get-ElapsedTimeString {
     <#
     .SYNOPSIS
-        Appends a transcript log file to the combined build log archive.
-
-    .DESCRIPTION
-        Uses Compress-Archive with -Update to append the specified log file to a
-        cumulative zip archive. Each provisioner's transcript is added to the same
-        archive, producing a single artifact for the entire Packer build.
-
-    .PARAMETER LogPath
-        The full path to the transcript log file to archive.
-
-    .PARAMETER ArchivePath
-        The path to the zip archive. Defaults to packer-build-logs.zip in the Logs directory.
-
-    .EXAMPLE
-        Add-LogToArchive -LogPath 'C:\Packer\Logs\initialize_20260322_120000.log'
+        Returns a formatted elapsed time string (HH:MM:SS) from a start time.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$LogPath,
-
-        [Parameter()]
-        [string]$ArchivePath = "$PSScriptRoot\..\Logs\packer-build-logs.zip"
+        [DateTime]$StartTime
     )
 
-    if (-not (Test-Path -Path $LogPath)) {
-        Write-Warning "Log file not found, skipping archive: $LogPath"
+    $Duration = (Get-Date).ToUniversalTime() - $StartTime
+    return '{0:D2}:{1:D2}:{2:D2}' -f [int]$Duration.TotalHours, $Duration.Minutes, $Duration.Seconds
+}
+
+function Stop-PackerTranscript {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$TranscriptState
+    )
+
+    try {
+        try {
+            $EndTime = (Get-Date).ToUniversalTime()
+            $Duration = New-TimeSpan -Start $TranscriptState.StartTime -End $EndTime
+            "END:   $($TranscriptState.ScriptName) at $($EndTime.ToString('u')). Duration: $($Duration.TotalSeconds) seconds" | Out-File -FilePath $TranscriptState.TimingLogPath -Append -Encoding utf8 -ErrorAction Stop
+        } catch {
+            $ErrorMsg = "Failed to write timing log: $($_.Exception.Message)"
+            Write-Warning $ErrorMsg
+            if ($TranscriptState.FailOnError) {
+                Write-Error "Timing log is required for this script. Exiting."
+                exit 1
+            }
+        }
+
+        Write-Output "Script execution completed - $($TranscriptState.ScriptName)"
+        try {
+            Stop-Transcript -ErrorAction Stop
+        } catch {
+            $ErrorMsg = "Failed to stop transcript: $($_.Exception.Message)"
+            Write-Warning $ErrorMsg
+            if ($TranscriptState.FailOnError) {
+                Write-Error "Transcript logging is required for this script. Exiting."
+                exit 1
+            }
+        }
+
+        if ($TranscriptState.ZipPath) {
+            $FilesToAdd = @()
+            if ($TranscriptState.TranscriptPath -and (Test-Path $TranscriptState.TranscriptPath)) {
+                $FilesToAdd += $TranscriptState.TranscriptPath
+            }
+            if ($TranscriptState.TimingLogPath -and (Test-Path $TranscriptState.TimingLogPath)) {
+                $FilesToAdd += $TranscriptState.TimingLogPath
+            }
+            if ($FilesToAdd.Count -gt 0) {
+                try {
+                    Compress-Archive -Path $FilesToAdd -DestinationPath $TranscriptState.ZipPath -Update
+                } catch {
+                    Write-Warning "Failed to update log zip: $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+    finally {
+    }
+}
+
+function Write-DetailedError {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    $Invocation = $ErrorRecord.InvocationInfo
+    $Exception = $ErrorRecord.Exception
+
+    $ErrorMessage = @"
+---------------------------------------------------------------------
+A fatal error occurred.
+
+Error Type:    $($Exception.GetType().FullName)
+Error Message: $($Exception.Message)
+
+Failing Command:  $($Invocation.MyCommand)
+Script:           $($Invocation.ScriptName)
+Line Number:      $($Invocation.ScriptLineNumber)
+Source Line:      $($Invocation.Line)
+
+Stack Trace:
+$($ErrorRecord.ScriptStackTrace)
+---------------------------------------------------------------------
+"@
+
+    Write-Error $ErrorMessage
+}
+
+#endregion
+
+#region EC2Launch Functions
+
+function Get-EC2LaunchInfo {
+    <#
+    .SYNOPSIS
+        Detects the installed version of EC2Launch and returns configuration paths.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [switch]$ShowInfo
+    )
+
+    $EC2LaunchInfo = [PSCustomObject]@{
+        OSEdition       = $null
+        OSVersion       = $null
+        OSBuild         = $null
+        AgentVersion    = '0.0.0'
+        EC2LaunchExe    = 'C:\Program Files\Amazon\EC2Launch\ec2launch.exe'
+        ConfigPath      = 'C:\ProgramData\Amazon\EC2Launch\config\agent-config.yml'
+        RunOnceFlagPath = 'C:\ProgramData\Amazon\EC2Launch\state\.run-once'
+        UnattendPath    = 'C:\ProgramData\Amazon\EC2Launch\unattend.xml'
+    }
+
+    try {
+        $WinCurrentVersion = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        $EC2LaunchInfo.OSEdition = $WinCurrentVersion.ProductName
+        $EC2LaunchInfo.OSVersion = $WinCurrentVersion.ReleaseId
+        $EC2LaunchInfo.OSBuild = '{0}.{1}' -f $WinCurrentVersion.CurrentBuild,$WinCurrentVersion.UBR
+
+        if (Test-Path -Path $EC2LaunchInfo.EC2LaunchExe) {
+            $EC2LaunchExe = Get-Item $EC2LaunchInfo.EC2LaunchExe
+            $EC2LaunchInfo.AgentVersion = $EC2LaunchExe.VersionInfo.ProductVersion
+            if ($ShowInfo) {
+                Write-Host "Operating System        : $($EC2LaunchInfo.OSEdition)"
+                Write-Host "OS Version              : $($EC2LaunchInfo.OSVersion)"
+                Write-Host "OS Build                : $($EC2LaunchInfo.OSBuild)"
+                Write-Host "EC2Launch Agent Version : $($EC2LaunchInfo.AgentVersion)"
+            }
+        }
+        return $EC2LaunchInfo
+    }
+    catch {
+        Write-Error "Failed to get EC2Launch info: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
+#endregion
+
+#region System Utilities
+
+function New-PackerLogDirectory {
+    <#
+    .SYNOPSIS
+        Creates the Packer logs directory with error handling and validation.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $LogPath = Get-PackerLogsPath
+    Write-Output "Creating Packer log directory: $LogPath"
+
+    if ([string]::IsNullOrWhiteSpace($LogPath)) {
+        $ErrorMsg = "CRITICAL: Log path is null or empty"
+        Write-Error $ErrorMsg
+        Write-Error "Log directory creation failed. Exiting."
+        exit 1
+    }
+
+    try {
+        [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is for testing purposes.')]
+        $TestPath = [System.IO.Path]::GetFullPath($LogPath)
+    } catch {
+        $ErrorMsg = "CRITICAL: Invalid log path '$LogPath': $($_.Exception.Message)"
+        Write-Error $ErrorMsg
+        Write-Error "Log directory creation failed. Exiting."
+        exit 1
+    }
+
+    if (Test-Path -Path $LogPath -PathType Container) {
+        Write-Output "Log directory already exists: $LogPath"
+
+        try {
+            $TestFile = Join-Path -Path $LogPath -ChildPath "test-write-$(Get-Date -Format 'yyyyMMddHHmmss').tmp"
+            "test" | Out-File -FilePath $TestFile -Encoding utf8 -ErrorAction Stop
+            Remove-Item -Path $TestFile -Force -ErrorAction Stop
+            Write-Output "Write permissions validated for existing directory"
+        } catch {
+            $ErrorMsg = "CRITICAL: Cannot write to existing log directory '$LogPath': $($_.Exception.Message)"
+            Write-Error $ErrorMsg
+            Write-Error "Log directory validation failed. Exiting."
+            exit 1
+        }
+
         return
     }
 
     try {
-        Compress-Archive -Path $LogPath -DestinationPath $ArchivePath -Update
-        Write-Verbose "Archived log to: $ArchivePath"
-    }
-    catch {
-        Write-Warning "Failed to archive log file: $_"
+        $CreatedDir = New-Item -Path $LogPath -ItemType Directory -Force -ErrorAction Stop
+        Write-Output "Successfully created log directory: $($CreatedDir.FullName)"
+
+        if (-not (Test-Path -Path $LogPath -PathType Container)) {
+            throw "Directory creation appeared successful but directory does not exist"
+        }
+
+        $TestFile = Join-Path -Path $LogPath -ChildPath "test-write-$(Get-Date -Format 'yyyyMMddHHmmss').tmp"
+        "test" | Out-File -FilePath $TestFile -Encoding utf8 -ErrorAction Stop
+        Remove-Item -Path $TestFile -Force -ErrorAction Stop
+        Write-Output "Write permissions validated for new directory"
+
+    } catch {
+        $ErrorMsg = "CRITICAL: Failed to create log directory '$LogPath': $($_.Exception.Message)"
+        Write-Error $ErrorMsg
+        Write-Error "Log directory creation failed. Exiting."
+        exit 1
     }
 }
 
-function Write-PackerLog {
+function Get-WindowsUpdateClientEvents {
     <#
     .SYNOPSIS
-        Writes a structured, timestamped log message.
-
-    .DESCRIPTION
-        Outputs a formatted log message with timestamp and severity level.
-        Messages are captured by the active transcript and displayed in the Packer
-        build output. Routes to Write-Warning or Write-Error for non-Info severities.
-
-    .PARAMETER Message
-        The log message text.
-
-    .PARAMETER Severity
-        The severity level: Info, Warning, or Error. Defaults to Info.
-
-    .EXAMPLE
-        Write-PackerLog -Message 'Installing software' -Severity Info
-
-    .EXAMPLE
-        Write-PackerLog -Message 'Disk space low' -Severity Warning
+        Displays Windows Update Client events from the operational log.
     #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Message,
+    param()
 
-        [Parameter()]
-        [ValidateSet('Info', 'Warning', 'Error')]
-        [string]$Severity = 'Info'
-    )
+    Write-Output "=== Windows Update Client Event Log Summary ==="
 
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $formatted = "[$timestamp] [$Severity] $Message"
+    try {
+        $Events = Get-WinEvent -LogName 'Microsoft-Windows-WindowsUpdateClient/Operational' -MaxEvents 50 -ErrorAction Stop |
+                 Where-Object { $_.TimeCreated.Date -eq (Get-Date).Date } |
+                 Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message |
+                 Sort-Object TimeCreated
 
-    switch ($Severity) {
-        'Info'    { Write-Host $formatted -ForegroundColor Cyan }
-        'Warning' { Write-Warning $formatted }
-        'Error'   { Write-Error $formatted }
+        if ($Events.Count -gt 0) {
+            Write-Output "Found $($Events.Count) events:"
+            $Events | Format-Table -AutoSize
+        } else {
+            Write-Output "No events found for today."
+        }
     }
+    catch {
+        Write-Output "Windows Update Client log not available: $($_.Exception.Message)"
+    }
+
+    Write-Output "=== End Windows Update Client Event Summary ==="
 }
 
-Export-ModuleMember -Function Start-PackerTranscript, Stop-PackerTranscript, Add-LogToArchive, Write-PackerLog
+#endregion
+
+Export-ModuleMember -Function Get-PackerBuildConfig, Start-PackerTranscript, Stop-PackerTranscript, Get-ElapsedTimeString, Get-PackerLogsPath, New-PackerLogDirectory, Get-EC2LaunchInfo, Get-WindowsUpdateClientEvents, Write-DetailedError

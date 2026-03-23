@@ -1,67 +1,79 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Restricts NTLM authentication and enforces NTLMv2.
-
+    Hardens the security settings for the NTLM authentication protocol on a Windows instance.
 .DESCRIPTION
-    Hardens NTLM settings by setting the LAN Manager authentication level
-    to NTLMv2 only (refusing LM and NTLMv1), and configures NTLM audit
-    logging for monitoring.
-
+    Sets registry values under HKLM for LSA and Netlogon: LmCompatibilityLevel, NoLMHash,
+    NtlmMinClientSec, NtlmMinServerSec, and RestrictSendingNTLMTraffic (DWORDs). Intended for
+    Packer AMI builds running as Administrator.
 .NOTES
-    File Name  : secure-ntlm.ps1
-    Runs As    : Administrator (via Packer provisioner)
-    Requires   : PowerShell 5.1+
-#>
+    Packer: The secure-ntlm provisioner always runs after download-installers and before install-chef-client.
 
+    Config: Reads C:\Packer\Config\build-config.json for LoggingModulePath (path to
+    packer-logging.psm1). That file is deployed by the Packer file provisioner before this script.
+
+    Get-Help: This script has no parameters; configuration is supplied via build-config.json.
+.EXAMPLE
+    PS C:\> & 'C:\Packer\Scripts\secure-ntlm.ps1'
+#>
 [CmdletBinding()]
 param()
 
-$ErrorActionPreference = 'Stop'
+# Load build configuration from file
+$ConfigPath = 'C:\Packer\Config\build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
+    exit 1
+}
+$Config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
 
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
-
-$scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
-
+$TranscriptState = $null
 try {
-    $logPath = Start-PackerTranscript -ScriptName $scriptName
-    Write-PackerLog -Message "Starting $scriptName"
+    $ErrorActionPreference = "Stop"
+    Import-Module -Name $Config.LoggingModulePath -Force
+    $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName "secure-ntlm.ps1"
 
-    $lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-    $msv1Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+    Write-Output "Applying NTLM hardening security settings..."
 
-    # Set LAN Manager authentication level to NTLMv2 only
-    # Level 5: Send NTLMv2 response only, refuse LM & NTLM
-    Write-PackerLog -Message "Setting LmCompatibilityLevel to 5 (NTLMv2 only, refuse LM and NTLMv1)"
-    Set-ItemProperty -Path $lsaPath -Name 'LmCompatibilityLevel' -Value 5 -Type DWord
+    $RegistrySettings = @(
+        @{
+            Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+            Name = 'LmCompatibilityLevel'
+            Value = 5
+        }
+        @{
+            Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+            Name = 'NoLMHash'
+            Value = 1
+        }
+        @{
+            Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+            Name = 'NtlmMinClientSec'
+            Value = 537395248
+        }
+        @{
+            Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+            Name = 'NtlmMinServerSec'
+            Value = 537395248
+        }
+        @{
+            Path = 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
+            Name = 'RestrictSendingNTLMTraffic'
+            Value = 2
+        }
+    )
 
-    # Restrict NTLM: Audit all NTLM authentication in this domain
-    Write-PackerLog -Message "Enabling NTLM audit logging"
-    if (-not (Test-Path -Path $msv1Path)) {
-        New-Item -Path $msv1Path -Force | Out-Null
+    foreach ($RegistrySetting in $RegistrySettings) {
+        $null = New-Item -Path $RegistrySetting.Path -Force
+        Set-ItemProperty -LiteralPath $RegistrySetting.Path -Name $RegistrySetting.Name -Value $RegistrySetting.Value -Type DWord -Force
+        Write-Output "  - Set $($RegistrySetting.Name) to $($RegistrySetting.Value) in $($RegistrySetting.Path)"
     }
-    Set-ItemProperty -Path $msv1Path -Name 'AuditReceivingNTLMTraffic' -Value 2 -Type DWord
-    Set-ItemProperty -Path $msv1Path -Name 'RestrictSendingNTLMTraffic' -Value 1 -Type DWord
-
-    # Disable LM hash storage
-    Write-PackerLog -Message "Disabling LM hash storage"
-    Set-ItemProperty -Path $lsaPath -Name 'NoLMHash' -Value 1 -Type DWord
-
-    # Configure minimum session security for NTLM SSP
-    Write-PackerLog -Message "Setting minimum NTLM SSP session security (require NTLMv2 and 128-bit encryption)"
-    Set-ItemProperty -Path $msv1Path -Name 'NtlmMinClientSec' -Value 0x20080000 -Type DWord
-    Set-ItemProperty -Path $msv1Path -Name 'NtlmMinServerSec' -Value 0x20080000 -Type DWord
-
-    Write-PackerLog -Message "Completed $scriptName successfully"
 }
 catch {
-    Write-PackerLog -Message "FAILED in ${scriptName}: $_" -Severity Error
-    throw
+    Write-DetailedError -ErrorRecord $_
+    exit 1
 }
 finally {
-    $transcriptFile = Stop-PackerTranscript
-    if ($transcriptFile) {
-        Add-LogToArchive -LogPath $transcriptFile
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
     }
 }

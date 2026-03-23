@@ -1,258 +1,159 @@
 <#
 .SYNOPSIS
-    Shared installation helper module for Packer provisioner scripts.
-
+    Packer Windows build: installer discovery, msiexec wait, and captured installer runs.
 .DESCRIPTION
-    Provides reusable functions for installing MSI and EXE packages, verifying
-    installed software, downloading installers, and waiting for processes to complete.
-
-.NOTES
-    File Name  : packer-install-helper.psm1
-    Requires   : PowerShell 5.1+
+    Imports packer-logging.psm1 from the same directory for Get-PackerLogsPath and related
+    helpers. Used by install scripts and install-from-manifest.
 #>
 
-function Install-MSI {
+# -Global: nested module exports are not visible to the caller script unless logging is imported into the session scope.
+Import-Module -Name (Join-Path $PSScriptRoot 'packer-logging.psm1') -Force -Global
+
+function Get-InstallFilesPath {
     <#
     .SYNOPSIS
-        Installs an MSI package silently.
-
-    .DESCRIPTION
-        Runs msiexec.exe with the specified MSI file and arguments. Validates the
-        exit code and optionally writes an installation log.
-
-    .PARAMETER Path
-        The full path to the MSI file.
-
-    .PARAMETER Arguments
-        Additional msiexec arguments. Defaults to '/qn /norestart'.
-
-    .PARAMETER LogPath
-        Optional path for the MSI installation log. Uses msiexec /l*v logging.
-
-    .EXAMPLE
-        Install-MSI -Path 'C:\Installers\chef-client.msi'
-
-    .EXAMPLE
-        Install-MSI -Path 'C:\Installers\agent.msi' -LogPath 'C:\Logs\agent-install.log'
+        Returns validated InstallFilesPath from build config.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
+        [psobject]$Config
+    )
+
+    $path = $Config.InstallFilesPath
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        throw "InstallFilesPath was not supplied in build-config.json."
+    }
+    return $path
+}
+
+function Find-PackerInstaller {
+    <#
+    .SYNOPSIS
+        Locates an installer by filter in the given path. Throws if not found.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
         [string]$Path,
 
-        [Parameter()]
-        [string]$Arguments = '/qn /norestart',
+        [Parameter(Mandatory)]
+        [string]$Filter,
 
-        [Parameter()]
-        [string]$LogPath
+        [Parameter(Mandatory)]
+        [string]$NotFoundMessage
     )
 
-    if (-not (Test-Path -Path $Path)) {
-        throw "MSI file not found: $Path"
+    $installer = Get-ChildItem -Path $Path -Filter $Filter -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $installer) {
+        throw $NotFoundMessage
     }
-
-    $msiArgs = @("/i", "`"$Path`"")
-    $msiArgs += $Arguments -split ' '
-
-    if ($LogPath) {
-        $msiArgs += "/l*v", "`"$LogPath`""
-    }
-
-    Write-Verbose "Running: msiexec.exe $($msiArgs -join ' ')"
-    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArgs -Wait -PassThru
-
-    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
-        throw "MSI installation failed with exit code $($process.ExitCode): $Path"
-    }
-
-    if ($process.ExitCode -eq 3010) {
-        Write-Warning "MSI installation succeeded but requires a reboot (exit code 3010): $Path"
-    }
-
-    Write-Verbose "MSI installation completed with exit code $($process.ExitCode)"
-    return $process.ExitCode
+    return $installer
 }
 
-function Install-EXE {
+function Invoke-WaitForMsiexec {
     <#
     .SYNOPSIS
-        Installs an EXE package silently.
-
-    .DESCRIPTION
-        Runs an executable installer with the specified arguments and validates
-        the exit code against a list of acceptable codes.
-
-    .PARAMETER Path
-        The full path to the EXE installer.
-
-    .PARAMETER Arguments
-        Installer arguments. Defaults to '/S' (common silent flag).
-
-    .PARAMETER ValidExitCodes
-        Array of acceptable exit codes. Defaults to 0 and 3010.
-
-    .EXAMPLE
-        Install-EXE -Path 'C:\Installers\crowdstrike.exe' -Arguments '/install /quiet /norestart CID=XXXXX'
+        Waits for msiexec processes to exit before proceeding.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path,
+        [Parameter()]
+        [Alias('TimeoutMinutes')]
+        [int]$TimeoutMins = 5,
 
         [Parameter()]
-        [string]$Arguments = '/S',
-
-        [Parameter()]
-        [int[]]$ValidExitCodes = @(0, 3010)
+        [int]$PollIntervalSeconds = 15
     )
 
-    if (-not (Test-Path -Path $Path)) {
-        throw "Installer not found: $Path"
-    }
-
-    Write-Verbose "Running: $Path $Arguments"
-    $process = Start-Process -FilePath $Path -ArgumentList $Arguments -Wait -PassThru
-
-    if ($process.ExitCode -notin $ValidExitCodes) {
-        throw "EXE installation failed with exit code $($process.ExitCode): $Path"
-    }
-
-    if ($process.ExitCode -eq 3010) {
-        Write-Warning "Installation succeeded but requires a reboot (exit code 3010): $Path"
-    }
-
-    Write-Verbose "EXE installation completed with exit code $($process.ExitCode)"
-    return $process.ExitCode
-}
-
-function Test-InstalledSoftware {
-    <#
-    .SYNOPSIS
-        Checks whether software is installed by searching the registry.
-
-    .DESCRIPTION
-        Queries the Windows uninstall registry keys (both 64-bit and 32-bit paths)
-        for a matching DisplayName.
-
-    .PARAMETER Name
-        The software name to search for (supports wildcards via -like).
-
-    .EXAMPLE
-        if (Test-InstalledSoftware -Name 'Chef Infra Client') { Write-Host 'Chef is installed' }
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Name
-    )
-
-    $registryPaths = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-
-    $installed = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -like "*$Name*" }
-
-    return [bool]$installed
-}
-
-function Get-InstallerFromUri {
-    <#
-    .SYNOPSIS
-        Downloads a file from a URI to a local path.
-
-    .DESCRIPTION
-        Downloads an installer or artifact from the specified URI. Creates the
-        destination directory if it does not exist.
-
-    .PARAMETER Uri
-        The download URI.
-
-    .PARAMETER DestinationPath
-        The full local path where the file will be saved.
-
-    .EXAMPLE
-        Get-InstallerFromUri -Uri 'https://example.com/installer.msi' -DestinationPath 'C:\Installers\installer.msi'
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Uri,
-
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$DestinationPath
-    )
-
-    $parentDir = Split-Path -Path $DestinationPath -Parent
-    if (-not (Test-Path -Path $parentDir)) {
-        New-Item -Path $parentDir -ItemType Directory -Force | Out-Null
-    }
-
-    Write-Verbose "Downloading: $Uri -> $DestinationPath"
-
-    # Use TLS 1.2 for PowerShell 5.1 compatibility
-    if ($PSVersionTable.PSVersion.Major -le 5) {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    }
-
-    Invoke-WebRequest -Uri $Uri -OutFile $DestinationPath -UseBasicParsing
-
-    if (-not (Test-Path -Path $DestinationPath)) {
-        throw "Download failed, file not found: $DestinationPath"
-    }
-
-    Write-Verbose "Download complete: $DestinationPath"
-    return $DestinationPath
-}
-
-function Wait-ForProcess {
-    <#
-    .SYNOPSIS
-        Waits for a process to exit within a timeout period.
-
-    .DESCRIPTION
-        Polls for the specified process and waits until it exits or the timeout
-        is reached. Useful for installers that spawn child processes.
-
-    .PARAMETER ProcessName
-        The process name to wait for (without .exe extension).
-
-    .PARAMETER TimeoutSeconds
-        Maximum time to wait in seconds. Defaults to 300 (5 minutes).
-
-    .EXAMPLE
-        $completed = Wait-ForProcess -ProcessName 'msiexec' -TimeoutSeconds 600
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$ProcessName,
-
-        [Parameter()]
-        [int]$TimeoutSeconds = 300
-    )
-
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-
-    while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        $proc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-        if (-not $proc) {
-            Write-Verbose "Process '$ProcessName' has exited."
-            return $true
+    Write-Output "Checking for existing msiexec processes..."
+    $Timeout = New-TimeSpan -Minutes $TimeoutMins
+    $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $WaitCount = 0
+    $LastDisplayedInstalling = $null
+    $StepSeconds = @(60, 45, 30, 15)
+    while (Get-Process -Name msiexec -ErrorAction SilentlyContinue) {
+        if ($Stopwatch.Elapsed -gt $Timeout) {
+            throw "Timeout waiting for other msiexec processes to exit."
         }
-        Write-Verbose "Waiting for process '$ProcessName' ($([int]$stopwatch.Elapsed.TotalSeconds)s / ${TimeoutSeconds}s)..."
-        Start-Sleep -Seconds 5
+        $msiexecProcs = Get-CimInstance -ClassName Win32_Process -Filter "Name = 'msiexec.exe'" -ErrorAction SilentlyContinue
+        $installing = $msiexecProcs | ForEach-Object {
+            $cmd = $_.CommandLine
+            if ($cmd -match '(?:/I|/i)\s+"([^"]+)"') {
+                [System.IO.Path]::GetFileName($Matches[1])
+            } elseif ($cmd -match '(?:/I|/i)\s+\{([^}]+)\}') {
+                "Product {$($Matches[1])}"
+            } elseif ($cmd -match '(?:/I|/i)\s+(\S+)') {
+                $m = $Matches[1]
+                if ($m -match '\.msi$') { [System.IO.Path]::GetFileName($m) } else { $m }
+            } else {
+                "PID $($_.ProcessId)"
+            }
+        } | Sort-Object -Unique
+        $installingStr = if ($installing) { $installing -join ', ' } else { $null }
+        if ($installingStr -and $installingStr -ne $LastDisplayedInstalling) {
+            Write-Output "  - Waiting on: $installingStr"
+            $LastDisplayedInstalling = $installingStr
+        }
+        $WaitCount++
+        $SleepSeconds = $StepSeconds[[Math]::Min($WaitCount - 1, $StepSeconds.Count - 1)]
+        Write-Output "  - Waited for $([int]$Stopwatch.Elapsed.TotalSeconds) seconds, retrying in ${SleepSeconds} seconds..."
+        Start-Sleep -Seconds $SleepSeconds
     }
-
-    Write-Warning "Timed out waiting for process '$ProcessName' after ${TimeoutSeconds} seconds."
-    return $false
+    if ($WaitCount -gt 0) {
+        Write-Output "  - msiexec cleared after $WaitCount wait(s), $([int]$Stopwatch.Elapsed.TotalSeconds)s total."
+    }
 }
 
-Export-ModuleMember -Function Install-MSI, Install-EXE, Test-InstalledSoftware, Get-InstallerFromUri, Wait-ForProcess
+function Invoke-PackerInstaller {
+    <#
+    .SYNOPSIS
+        Runs an installer with stdout/stderr capture and outputs captured content for visibility.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory)]
+        [array]$ArgumentList,
+
+        [Parameter(Mandatory)]
+        [string]$InstallerName,
+
+        [Parameter(Mandatory)]
+        [string]$LogPrefix
+    )
+
+    $LogDir = Get-PackerLogsPath
+    $StdoutPath = Join-Path -Path $LogDir -ChildPath "${LogPrefix}-installer-stdout.log"
+    $StderrPath = Join-Path -Path $LogDir -ChildPath "${LogPrefix}-installer-stderr.log"
+
+    $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow `
+        -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath
+
+    if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+        throw "$InstallerName installation failed with exit code $($proc.ExitCode)."
+    }
+
+    if (Test-Path $StdoutPath) {
+        $stdout = Get-Content -Path $StdoutPath -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Output "--- $InstallerName installer stdout ---"
+            Write-Output $stdout.Trim()
+            Write-Output "--- end stdout ---"
+        }
+    }
+    if (Test-Path $StderrPath) {
+        $stderr = Get-Content -Path $StderrPath -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            Write-Output "--- $InstallerName installer stderr ---"
+            Write-Output $stderr.Trim()
+            Write-Output "--- end stderr ---"
+        }
+    }
+
+    return $proc
+}
+
+Export-ModuleMember -Function Get-InstallFilesPath, Find-PackerInstaller, Invoke-WaitForMsiexec, Invoke-PackerInstaller

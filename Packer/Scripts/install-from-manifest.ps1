@@ -1,103 +1,165 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Installs software packages defined in a JSON manifest.
-
+    Installs packages from manifest using config-driven install arguments.
 .DESCRIPTION
-    Reads a JSON manifest file that defines software packages and their
-    installation parameters. Supports both MSI and EXE installers.
-    Each item in the manifest specifies the installer type, filename,
-    and optional arguments.
-
-.PARAMETER ManifestPath
-    Path to the JSON manifest file. Defaults to install-manifest.json in the script directory.
-
-.PARAMETER InstallerDirectory
-    Directory containing the downloaded installer files. Defaults to C:\PackerInstallers.
-
+    Reads InstallFromManifestPackages and InstallerArguments from build-config.
+    Resolves each package from manifest (same logic as download-installers).
+    Runs installers with configured args. Supports EXE (run directly) and MSI (via msiexec).
+    Does NOT handle service disable - use dedicated scripts (crowdstrike) for those.
 .NOTES
-    File Name  : install-from-manifest.ps1
-    Runs As    : Administrator (via Packer provisioner)
-    Requires   : PowerShell 5.1+
+    Package format: pkgId (latest) or pkgId@version (pinned).
+    InstallerArguments key = pkgId only (no version).
 #>
-
 [CmdletBinding()]
-param(
-    [Parameter()]
-    [string]$ManifestPath = "$PSScriptRoot\install-manifest.json",
+param()
 
-    [Parameter()]
-    [string]$InstallerDirectory = 'C:\PackerInstallers'
-)
+# Load modules (install-helper imports packer-logging)
+$ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
+    exit 1
+}
+$bootstrap = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+$helperPath = $bootstrap.InstallHelperModulePath
+if (-not (Test-Path $helperPath)) {
+    Write-Error "FATAL: Packer install helper module not found at '$helperPath'. The build cannot continue."
+    exit 1
+}
+Import-Module -Name $helperPath -Force
+$Config = Get-PackerBuildConfig
 
-$ErrorActionPreference = 'Stop'
-
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
-
-$scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
-
+$TranscriptState = $null
 try {
-    $logPath = Start-PackerTranscript -ScriptName $scriptName
-    Write-PackerLog -Message "Starting $scriptName"
+    $ErrorActionPreference = 'Stop'
+    $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'install-from-manifest.ps1'
 
-    if (-not (Test-Path -Path $ManifestPath)) {
-        Write-PackerLog -Message "Manifest file not found: $ManifestPath" -Severity Warning
-        Write-PackerLog -Message "Create an install-manifest.json with a 'packages' array."
-        Write-PackerLog -Message "Completed $scriptName (no manifest to process)"
-        return
+    $InstallFilesPath = Get-InstallFilesPath -Config $Config
+    $Packages = @()
+    if ($Config.PSObject.Properties['InstallFromManifestPackages']) {
+        $Packages = $Config.InstallFromManifestPackages
+    }
+    $InstallerArgs = @{}
+    if ($Config.PSObject.Properties['InstallerArguments']) {
+        $InstallerArgs = $Config.InstallerArguments
     }
 
-    $manifest = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
-    $totalPackages = @($manifest.packages).Count
-    $currentPackage = 0
+    if (-not $Packages -or $Packages.Count -eq 0) {
+        Write-Output "InstallFromManifestPackages is empty; nothing to install."
+        exit 0
+    }
 
-    Write-PackerLog -Message "Processing $totalPackages package(s) from manifest"
+    $ManifestPath = Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'
+    if (-not (Test-Path $ManifestPath)) {
+        throw "Manifest not found at '$ManifestPath'. Ensure download-installers.ps1 has run first."
+    }
+    $Manifest = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
+    $sections = $Manifest.manifest_section
 
-    foreach ($package in $manifest.packages) {
-        $currentPackage++
-        $installerPath = Join-Path -Path $InstallerDirectory -ChildPath $package.filename
-        Write-PackerLog -Message "[$currentPackage/$totalPackages] Installing: $($package.name)"
+    if ($Packages -isnot [System.Array]) {
+        $Packages = @($Packages)
+    }
 
-        if (-not (Test-Path -Path $installerPath)) {
-            Write-PackerLog -Message "Installer not found, skipping: $installerPath" -Severity Warning
-            continue
+    $idx = 0
+    foreach ($pkg in $Packages) {
+        $pkg = $pkg.Trim()
+        if ([string]::IsNullOrWhiteSpace($pkg)) { continue }
+
+        $pkgId = $pkg
+        $requestedVersion = $null
+        if ($pkg -match '^(.+?)@(.+)$') {
+            $pkgId = $Matches[1].Trim()
+            $requestedVersion = $Matches[2].Trim()
         }
 
-        switch ($package.type) {
-            'msi' {
-                $msiArgs = if ($package.arguments) { $package.arguments } else { '/qn /norestart' }
-                Install-MSI -Path $installerPath -Arguments $msiArgs
+        # Get install args (keyed by pkgId only)
+        $pkgConfig = $InstallerArgs.$pkgId
+        if (-not $pkgConfig -or -not $pkgConfig.args) {
+            throw "InstallerArguments for '$pkgId' not found in build-config. Add args for each package in InstallFromManifestPackages."
+        }
+        $installArgs = $pkgConfig.args
+        $useMsiexec = ($pkgConfig.executable -eq 'msiexec')
+
+        # Resolve file from manifest (same logic as download-installers)
+        $s3Key = $null
+        $resolved = $false
+
+        if ($requestedVersion) {
+            foreach ($section in $sections) {
+                $sectionFiles = $section.files
+                if (-not $sectionFiles) { continue }
+                $productPath = "/$pkgId/"
+                $entry = $sectionFiles | Where-Object {
+                    $_.s3_key -and $_.s3_key -like "*$productPath*" -and
+                    $_.version -and $_.version.ToString() -eq $requestedVersion -and
+                    (($_.arch -eq '64') -or [string]::IsNullOrWhiteSpace($_.arch))
+                } | Select-Object -First 1
+                if (-not $entry) {
+                    $entry = $sectionFiles | Where-Object {
+                        $_.s3_key -and $_.s3_key -like "*$productPath*" -and
+                        $_.version -and $_.version.ToString() -eq $requestedVersion
+                    } | Select-Object -First 1
+                }
+                if ($entry -and $entry.s3_key) {
+                    $s3Key = $entry.s3_key
+                    $resolved = $true
+                    break
+                }
             }
-            'exe' {
-                $exeArgs = if ($package.arguments) { $package.arguments } else { '/S' }
-                Install-EXE -Path $installerPath -Arguments $exeArgs
+            if (-not $resolved) {
+                throw "Package '$pkgId' version '$requestedVersion' not found in manifest."
             }
-            default {
-                Write-PackerLog -Message "Unknown installer type '$($package.type)' for $($package.name)" -Severity Warning
+        }
+        else {
+            foreach ($section in $sections) {
+                $latest = $section.latest
+                if (-not $latest -or -not $latest.PSObject.Properties[$pkgId]) { continue }
+                $product = $latest.$pkgId
+                $files = $product.files
+                if ($files) {
+                    $entry = $files | Where-Object { ($_.arch -eq '64') -or ([string]::IsNullOrWhiteSpace($_.arch)) } | Select-Object -First 1
+                    if ($entry -and $entry.s3_key) {
+                        $s3Key = $entry.s3_key
+                        $resolved = $true
+                        break
+                    }
+                }
+            }
+            if (-not $resolved) {
+                throw "Package '$pkgId' (latest) not found in manifest."
             }
         }
 
-        # Verify installation if a verification name is provided
-        if ($package.verifyName) {
-            if (Test-InstalledSoftware -Name $package.verifyName) {
-                Write-PackerLog -Message "Verified: $($package.verifyName) is installed"
-            }
-            else {
-                Write-PackerLog -Message "Verification failed: $($package.verifyName) not found in registry" -Severity Warning
-            }
+        $fileName = Split-Path -Path $s3Key -Leaf
+        $installerPath = Join-Path -Path $InstallFilesPath -ChildPath $fileName
+
+        if (-not (Test-Path $installerPath)) {
+            throw "Installer not found at '$installerPath'. Ensure download-installers.ps1 has run and ManifestPackages includes '$pkg'."
+        }
+
+        $idx++
+        $logPrefix = "install_from_manifest_$idx"
+        $isMsi = $fileName -match '\.msi$' -or $useMsiexec
+
+        if ($isMsi) {
+            $execArgs = $installArgs + @($installerPath)
+            Write-Output "Installing ${pkg} via msiexec: $fileName"
+            $null = Invoke-PackerInstaller -FilePath 'msiexec.exe' -ArgumentList $execArgs -InstallerName $pkgId -LogPrefix $logPrefix
+        }
+        else {
+            Write-Output "Installing ${pkg}: $fileName"
+            $null = Invoke-PackerInstaller -FilePath $installerPath -ArgumentList $installArgs -InstallerName $pkgId -LogPrefix $logPrefix
         }
     }
 
-    Write-PackerLog -Message "Completed $scriptName successfully"
+    $Elapsed = Get-ElapsedTimeString -StartTime $TranscriptState.StartTime
+    Write-Output "Install-from-manifest completed successfully. Installed $($Packages.Count) package(s). Completed in $Elapsed"
 }
 catch {
-    Write-PackerLog -Message "FAILED in ${scriptName}: $_" -Severity Error
-    throw
+    Write-DetailedError -ErrorRecord $_
+    exit 1
 }
 finally {
-    $transcriptFile = Stop-PackerTranscript
-    if ($transcriptFile) {
-        Add-LogToArchive -LogPath $transcriptFile
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
     }
 }

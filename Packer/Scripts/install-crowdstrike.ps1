@@ -1,73 +1,57 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Installs the CrowdStrike Falcon sensor.
-
+    Installs CrowdStrike Falcon sensor during Packer AMI build.
 .DESCRIPTION
-    Installs the CrowdStrike Falcon sensor with the specified Customer ID (CID).
-    Verifies the installation by checking for the CSFalconService Windows service.
-
-.PARAMETER InstallerPath
-    Path to the CrowdStrike installer executable.
-
-.PARAMETER CID
-    The CrowdStrike Customer ID for sensor registration.
-
+    Installs CrowdStrike Falcon sensor from a pre-staged EXE (downloaded by
+    download-installers.ps1 via manifest). Uses NO_START=1 for sysprep compatibility (per CrowdStrike aws-ec2-image-builder).
+    CID is passed via CROWDSTRIKE_CID environment variable (GitLab CI variables).
 .NOTES
-    File Name  : install-crowdstrike.ps1
-    Runs As    : Administrator (via Packer provisioner)
-    Requires   : PowerShell 5.1+
+    Runs just before finalize.ps1. Requires CROWDSTRIKE_CID env var.
 #>
-
 [CmdletBinding()]
-param(
-    [Parameter()]
-    [string]$InstallerPath = 'C:\PackerInstallers\CrowdStrikeWindowsSensor.exe',
+param()
 
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$CID
-)
+$ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
+    exit 1
+}
+$bootstrap = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+$helperPath = $bootstrap.InstallHelperModulePath
+if (-not (Test-Path $helperPath)) {
+    Write-Error "FATAL: Packer install helper module not found at '$helperPath'. The build cannot continue."
+    exit 1
+}
+Import-Module -Name $helperPath -Force
+$Config = Get-PackerBuildConfig
 
-$ErrorActionPreference = 'Stop'
-
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
-
-$scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
-
+$TranscriptState = $null
 try {
-    $logPath = Start-PackerTranscript -ScriptName $scriptName
-    Write-PackerLog -Message "Starting $scriptName"
+    $ErrorActionPreference = 'Stop'
+    $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'install-crowdstrike.ps1'
 
-    if (-not (Test-Path -Path $InstallerPath)) {
-        throw "CrowdStrike installer not found: $InstallerPath"
+    $crowdCid = [Environment]::GetEnvironmentVariable('CROWDSTRIKE_CID', 'Process')
+    if ([string]::IsNullOrWhiteSpace($crowdCid)) {
+        throw "CROWDSTRIKE_CID environment variable is not set. CROWDSTRIKE_CID must be set in GitLab CI variables."
     }
+    $InstallFilesPath = Get-InstallFilesPath -Config $Config
+    $FalconExe = Find-PackerInstaller -Path $InstallFilesPath -Filter 'FalconSensor_Windows_*_x64.exe' -NotFoundMessage "CrowdStrike Falcon installer not found in '$InstallFilesPath'. Ensure manifest includes crowdstrike package."
 
-    # Install CrowdStrike Falcon sensor
-    Write-PackerLog -Message "Installing CrowdStrike Falcon sensor"
-    $installArgs = "/install /quiet /norestart CID=$CID"
-    Install-EXE -Path $InstallerPath -Arguments $installArgs
+    Write-Output "Installing CrowdStrike Falcon sensor: $($FalconExe.Name)"
+    Invoke-WaitForMsiexec -TimeoutMinutes 5 -PollIntervalSeconds 15
 
-    # Verify the CrowdStrike service exists
-    Write-PackerLog -Message "Verifying CrowdStrike Falcon service"
-    $service = Get-Service -Name 'CSFalconService' -ErrorAction SilentlyContinue
-    if ($service) {
-        Write-PackerLog -Message "CrowdStrike Falcon service found (Status: $($service.Status))"
-    }
-    else {
-        throw "CrowdStrike Falcon service (CSFalconService) not found after installation"
-    }
+    $InstallArgs = @('/install', '/quiet', '/norestart', "CID=$($env:CROWDSTRIKE_CID)", 'NO_START=1')
+    $null = Invoke-PackerInstaller -FilePath $FalconExe.FullName -ArgumentList $InstallArgs -InstallerName 'CrowdStrike Falcon' -LogPrefix 'crowdstrike'
 
-    Write-PackerLog -Message "Completed $scriptName successfully"
+    $Elapsed = Get-ElapsedTimeString -StartTime $TranscriptState.StartTime
+    Write-Output "CrowdStrike Falcon sensor installed successfully (NO_START=1 for sysprep). Completed in $Elapsed"
 }
 catch {
-    Write-PackerLog -Message "FAILED in ${scriptName}: $_" -Severity Error
-    throw
+    Write-DetailedError -ErrorRecord $_
+    exit 1
 }
 finally {
-    $transcriptFile = Stop-PackerTranscript
-    if ($transcriptFile) {
-        Add-LogToArchive -LogPath $transcriptFile
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
     }
 }

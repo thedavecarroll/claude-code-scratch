@@ -1,80 +1,244 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Downloads installer packages to a local staging directory.
-
+    Copies required installers from S3 into the shared installer cache.
 .DESCRIPTION
-    Downloads software installers from specified URIs to a local staging
-    directory for subsequent installation by other provisioner scripts.
-    Supports an optional JSON manifest for batch downloads.
-
-.PARAMETER StagingDirectory
-    The local directory where installers are downloaded. Defaults to C:\PackerInstallers.
-
-.PARAMETER ManifestPath
-    Optional path to a JSON file listing download URIs and target filenames.
-
+    - Reads C:\Packer\Config\build-config.json for inputs.
+    - Downloads to C:\ProgramData\Installers (shared cache for Chef).
+    - Uses Copy-S3Object with retry logic for resiliency.
+    - Fails fast on error to stop the pipeline.
 .NOTES
-    File Name  : download-installers.ps1
-    Runs As    : Administrator (via Packer provisioner)
-    Requires   : PowerShell 5.1+
+    The installer cache at C:\ProgramData\Installers is shared between Packer
+    and Chef. Files downloaded here are used by Chef's plaisse_win_installer
+    resource without re-downloading.
+
+    Package format in ManifestPackages: "pkgId" (latest) or "pkgId@version" (pinned).
+    Example: "mssql" uses latest; "mssql@17.10.6.1" pins to that version.
 #>
-
 [CmdletBinding()]
-param(
-    [Parameter()]
-    [string]$StagingDirectory = 'C:\PackerInstallers',
+param()
 
-    [Parameter()]
-    [string]$ManifestPath
-)
+# Load build configuration
+$ConfigPath = 'C:\Packer\Config\build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'."
+    exit 1
+}
+$Config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
 
-$ErrorActionPreference = 'Stop'
-
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
-
-$scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
-
+$TranscriptState = $null
 try {
-    $logPath = Start-PackerTranscript -ScriptName $scriptName
-    Write-PackerLog -Message "Starting $scriptName"
+    $ErrorActionPreference = 'Stop'
 
-    if (-not (Test-Path -Path $StagingDirectory)) {
-        New-Item -Path $StagingDirectory -ItemType Directory -Force | Out-Null
+    Import-Module -Name $Config.LoggingModulePath -Force
+
+    $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'download-installers.ps1'
+
+    $ProgressPreference = 'SilentlyContinue'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::Expect100Continue = $false
+
+    # --- UPDATED: DISCOVER AWS MODULE VIA COMMAND ---
+    $S3Command = Get-Command -Name Copy-S3Object -ErrorAction SilentlyContinue
+    if ($null -eq $S3Command) {
+        throw "Required command 'Copy-S3Object' not found. Ensure an AWS PowerShell module is installed."
     }
 
-    if ($ManifestPath -and (Test-Path -Path $ManifestPath)) {
-        Write-PackerLog -Message "Reading download manifest: $ManifestPath"
-        $manifest = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
+    $awsModule = $S3Command.Source
+    Import-Module -Name $awsModule -ErrorAction Stop
+    # -----------------------------------------------
+    Write-Output "Using Copy-S3Object from module: $awsModule"
 
-        foreach ($item in $manifest.downloads) {
-            $destination = Join-Path -Path $StagingDirectory -ChildPath $item.filename
-            Write-PackerLog -Message "Downloading: $($item.uri) -> $($item.filename)"
+    $InstallFilesPath = $Config.InstallFilesPath
+    $null = New-Item -Path $InstallFilesPath -ItemType Directory -Force
 
-            try {
-                Get-InstallerFromUri -Uri $item.uri -DestinationPath $destination
-                Write-PackerLog -Message "Downloaded successfully: $($item.filename)"
+    $InstallerBucketName = $null
+    if ($Config.PSObject.Properties['InstallerBucketName']) {
+        $InstallerBucketName = $Config.InstallerBucketName
+    }
+    if ([string]::IsNullOrWhiteSpace($InstallerBucketName)) {
+        throw "InstallerBucketName was not provided in build-config.json."
+    }
+    $InstallerBucketName = $InstallerBucketName.Trim()
+    if ($InstallerBucketName -like 's3://*') {
+        $InstallerBucketName = $InstallerBucketName.Substring(5)
+    }
+    $InstallerBucketName = $InstallerBucketName.Trim('/')
+
+    $InstallerBucketRegion = $null
+    if ($Config.PSObject.Properties['InstallerBucketRegion']) {
+        $InstallerBucketRegion = $Config.InstallerBucketRegion
+    }
+    $S3Params = @{ Force = $true }
+    if (-not [string]::IsNullOrWhiteSpace($InstallerBucketRegion)) {
+        $S3Params["Region"] = $InstallerBucketRegion.Trim()
+    }
+
+    # --- MANIFEST: Download manifest.json first ---
+    $ManifestS3Key = $null
+    if ($Config.PSObject.Properties['ManifestS3Key']) {
+        $ManifestS3Key = $Config.ManifestS3Key
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ManifestS3Key)) {
+        $ManifestS3Key = $ManifestS3Key.Trim()
+        $ManifestTargetPath = Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'
+        Write-Output "Downloading manifest: s3://$InstallerBucketName/$ManifestS3Key -> $ManifestTargetPath"
+        try {
+            Copy-S3Object -BucketName $InstallerBucketName -Key $ManifestS3Key -LocalFile $ManifestTargetPath @S3Params
+            if (Test-Path $ManifestTargetPath) {
+                Write-Output "Manifest downloaded successfully."
             }
-            catch {
-                Write-PackerLog -Message "Failed to download $($item.filename): $_" -Severity Warning
+        }
+        catch {
+            throw "Failed to download manifest from s3://$InstallerBucketName/$ManifestS3Key : $($_.Exception.Message)"
+        }
+    }
+
+    # --- MANIFEST: Resolve package keys from manifest ---
+    # Package format: "pkgId" (latest) or "pkgId@version" (pinned)
+    $ManifestPackageKeys = @()
+    $ManifestPackages = @()
+    if ($Config.PSObject.Properties['ManifestPackages']) {
+        $ManifestPackages = $Config.ManifestPackages
+    }
+    if ($ManifestPackages -and (Test-Path (Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'))) {
+        $ManifestPath = Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'
+        $Manifest = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
+        $sections = $Manifest.manifest_section
+        if ($ManifestPackages -isnot [System.Array]) {
+            $ManifestPackages = @($ManifestPackages)
+        }
+        foreach ($pkg in $ManifestPackages) {
+            $pkg = $pkg.Trim()
+            if ([string]::IsNullOrWhiteSpace($pkg)) { continue }
+
+            $pkgId = $pkg
+            $requestedVersion = $null
+            if ($pkg -match '^(.+?)@(.+)$') {
+                $pkgId = $Matches[1].Trim()
+                $requestedVersion = $Matches[2].Trim()
+            }
+
+            $resolved = $false
+            if ($requestedVersion) {
+                # Search section-level files for version match (prefer arch 64)
+                foreach ($section in $sections) {
+                    $sectionFiles = $section.files
+                    if (-not $sectionFiles) { continue }
+                    $productPath = "/$pkgId/"
+                    $entries = $sectionFiles | Where-Object {
+                        $_.s3_key -and $_.s3_key -like "*$productPath*" -and
+                        $_.version -and $_.version.ToString() -eq $requestedVersion -and
+                        (($_.arch -eq '64') -or [string]::IsNullOrWhiteSpace($_.arch))
+                    }
+                    if (-not $entries -or $entries.Count -eq 0) {
+                        $entries = $sectionFiles | Where-Object {
+                            $_.s3_key -and $_.s3_key -like "*$productPath*" -and
+                            $_.version -and $_.version.ToString() -eq $requestedVersion
+                        }
+                    }
+                    if ($entries) {
+                        foreach ($entry in $entries) {
+                            if ($entry -and $entry.s3_key) {
+                                $ManifestPackageKeys += $entry.s3_key
+                                Write-Output "Resolved manifest package '$pkgId'@$requestedVersion -> $($entry.s3_key)"
+                            }
+                        }
+                        $resolved = $true
+                        break
+                    }
+                }
+                if (-not $resolved) {
+                    throw "Package '$pkgId' version '$requestedVersion' not found in manifest. Check section.files for matching entry."
+                }
+            }
+            else {
+                # Use latest (existing logic)
+                foreach ($section in $sections) {
+                    $latest = $section.latest
+                    if (-not $latest -or -not $latest.PSObject.Properties[$pkgId]) { continue }
+                    $product = $latest.$pkgId
+                    $files = $product.files
+                    if ($files) {
+                        $entries = @($files | Where-Object { ($_.arch -eq '64') -or ([string]::IsNullOrWhiteSpace($_.arch)) })
+                        foreach ($entry in $entries) {
+                            if ($entry -and $entry.s3_key) {
+                                $ManifestPackageKeys += $entry.s3_key
+                                Write-Output "Resolved manifest package '$pkgId' (latest) -> $($entry.s3_key)"
+                            }
+                        }
+                        if ($entries -and $entries.Count -gt 0) {
+                            $resolved = $true
+                            break
+                        }
+                    }
+                }
             }
         }
     }
-    else {
-        Write-PackerLog -Message "No manifest provided or found. Add download URIs to a manifest JSON file." -Severity Warning
-        # TODO: Add direct download URIs here if not using a manifest
+
+    # --- Use manifest-resolved keys only ---
+    $AllKeys = @($ManifestPackageKeys) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    if (-not $AllKeys) {
+        throw "No packages resolved from manifest. Ensure ManifestPackages in build-config includes valid package IDs (e.g. chef_client, crowdstrike) and manifest.json contains those packages."
     }
 
-    Write-PackerLog -Message "Completed $scriptName successfully"
+    foreach ($key in $AllKeys) {
+        if ([string]::IsNullOrWhiteSpace($key)) {
+            Write-Warning 'Encountered blank installer key; skipping.'
+            continue
+        }
+
+        $objectName = Split-Path -Path $key -Leaf
+        if ([string]::IsNullOrWhiteSpace($objectName)) {
+            $objectName = [Guid]::NewGuid().ToString()
+        }
+
+        $targetPath = Join-Path -Path $InstallFilesPath -ChildPath $objectName
+        Write-Output "Starting S3 copy: s3://$InstallerBucketName/$key -> $targetPath"
+
+        $maxRetries = 3
+        $attempt = 0
+        $copyComplete = $false
+        $startTime = Get-Date
+
+        while (-not $copyComplete -and $attempt -lt $maxRetries) {
+            $attempt++
+            try {
+                # UPDATED: Added @S3Params splat
+                Copy-S3Object -BucketName $InstallerBucketName -Key $key -LocalFile $targetPath @S3Params
+
+                if (-not (Test-Path $targetPath)) {
+                    throw "Expected file missing after Copy-S3Object: $targetPath"
+                }
+                $copyComplete = $true
+            }
+            catch {
+                if ($attempt -ge $maxRetries) {
+                    throw "Copy failed for s3://$InstallerBucketName/$key after $maxRetries attempts: $($_.Exception.Message)"
+                }
+                Write-Warning "Copy failed for s3://$InstallerBucketName/$key. Retrying in 10 seconds... ($attempt/$maxRetries). Error: $($_.Exception.Message)"
+                Start-Sleep -Seconds 10
+            }
+        }
+
+        if ($copyComplete) {
+            $endTime = Get-Date
+            $elapsed = $endTime - $startTime
+            $fileSizeMB = 0
+            if (Test-Path $targetPath) {
+                $fileSizeMB = [math]::Round((Get-Item $targetPath).Length / 1MB, 2)
+            }
+            $timeTakenFormatted = '{0:D2}:{1:D2}' -f [int]$elapsed.TotalMinutes, $elapsed.Seconds
+            Write-Output ("Copy complete: {0}. Completed in {1} ({2} MB)" -f $objectName, $timeTakenFormatted, $fileSizeMB)
+        }
+    }
 }
 catch {
-    Write-PackerLog -Message "FAILED in ${scriptName}: $_" -Severity Error
-    throw
+    Write-DetailedError -ErrorRecord $_
+    exit 1
 }
 finally {
-    $transcriptFile = Stop-PackerTranscript
-    if ($transcriptFile) {
-        Add-LogToArchive -LogPath $transcriptFile
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
     }
 }

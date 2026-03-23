@@ -1,87 +1,105 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Configures BGInfo to display system information on the desktop.
-
+    Configures BgInfo from Sysinternals (manifest) and sets up logon startup.
 .DESCRIPTION
-    Copies a BGInfo configuration file to a standard location and registers
-    BGInfo to run at user logon via the registry Run key.
-
-.PARAMETER BgiConfigPath
-    Path to the BGInfo configuration file (.bgi). Defaults to the staging directory.
-
-.PARAMETER BgInfoExePath
-    Path to the BGInfo executable. Defaults to the staging directory.
-
+    Extracts Sysinternals zip to C:\Sysinternals. Copies BgInfo64.exe to C:\ProgramData\BgInfo.
+    Renames {ChefOrganization}.bgi to bginfo.bgi. BgInfo scripts are provisioned to C:\ProgramData\BgInfo
+    by the BGInfo file provisioner. Creates startup shortcut to run at logon. Sets EulaAccepted registry key.
 .NOTES
-    File Name  : config-bginfo.ps1
-    Runs As    : Administrator (via Packer provisioner)
-    Requires   : PowerShell 5.1+
+    Runs after download-installers.ps1. Requires sysinternals in manifest.
 #>
-
 [CmdletBinding()]
-param(
-    [Parameter()]
-    [string]$BgiConfigPath = 'C:\PackerInstallers\bginfo.bgi',
+param()
 
-    [Parameter()]
-    [string]$BgInfoExePath = 'C:\PackerInstallers\Bginfo64.exe'
-)
+# Load build configuration
+$ConfigPath = 'C:\Packer\Config\build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'."
+    exit 1
+}
+$Config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
 
-$ErrorActionPreference = 'Stop'
-
-Import-Module -Name "$PSScriptRoot\packer-logging.psm1" -Force
-Import-Module -Name "$PSScriptRoot\packer-install-helper.psm1" -Force
-
-$scriptName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
-
+$TranscriptState = $null
 try {
-    $logPath = Start-PackerTranscript -ScriptName $scriptName
-    Write-PackerLog -Message "Starting $scriptName"
+    $ErrorActionPreference = 'Stop'
+    Import-Module -Name $Config.LoggingModulePath -Force
+    $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'config-bginfo.ps1'
 
-    $bgInfoDir = 'C:\BGInfo'
+    $InstallFilesPath = $Config.InstallFilesPath
+    $BgInfoDir = $Config.BgInfoPath
+    $SysinternalsDir = $Config.SysinternalsPath
 
-    # Create BGInfo directory
-    if (-not (Test-Path -Path $bgInfoDir)) {
-        Write-PackerLog -Message "Creating BGInfo directory: $bgInfoDir"
-        New-Item -Path $bgInfoDir -ItemType Directory -Force | Out-Null
+    if ([string]::IsNullOrWhiteSpace($BgInfoDir)) {
+        throw "BgInfoPath was not supplied in build-config.json."
+    }
+    if ([string]::IsNullOrWhiteSpace($SysinternalsDir)) {
+        throw "SysinternalsPath was not supplied in build-config.json."
     }
 
-    # Copy BGInfo executable
-    if (Test-Path -Path $BgInfoExePath) {
-        $destExe = Join-Path -Path $bgInfoDir -ChildPath (Split-Path -Path $BgInfoExePath -Leaf)
-        Copy-Item -Path $BgInfoExePath -Destination $destExe -Force
-        Write-PackerLog -Message "Copied BGInfo executable to: $destExe"
+    $null = New-Item -Path $BgInfoDir -ItemType Directory -Force
+
+    # Find Sysinternals zip (from manifest download)
+    $SysinternalsZip = Get-ChildItem -Path $InstallFilesPath -Filter '*Sysinternals*.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $SysinternalsZip) {
+        $SysinternalsZip = Get-ChildItem -Path $InstallFilesPath -Filter '*.zip' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'sysinternals|Sysinternals' } | Select-Object -First 1
+    }
+    if (-not $SysinternalsZip) {
+        throw "Sysinternals zip not found in '$InstallFilesPath'. Ensure manifest includes sysinternals package."
+    }
+
+    Write-Output "Extracting Sysinternals: $($SysinternalsZip.Name)"
+    $null = New-Item -Path $SysinternalsDir -ItemType Directory -Force
+    Expand-Archive -Path $SysinternalsZip.FullName -DestinationPath $SysinternalsDir -Force
+
+    # Find BgInfo64.exe (or BgInfo.exe) and optional default .bgi in zip
+    $BgInfoExe = Get-ChildItem -Path $SysinternalsDir -Filter 'BgInfo64.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $BgInfoExe) {
+        $BgInfoExe = Get-ChildItem -Path $SysinternalsDir -Filter 'BgInfo.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if (-not $BgInfoExe) {
+        throw "BgInfo64.exe or BgInfo.exe not found in Sysinternals zip."
+    }
+
+    Copy-Item -Path $BgInfoExe.FullName -Destination (Join-Path -Path $BgInfoDir -ChildPath 'BgInfo64.exe') -Force
+
+    # Rename {ChefOrganization}.bgi to bginfo.bgi in C:\ProgramData\BgInfo
+    $ChefOrg = $Config.ChefOrganization
+    if ([string]::IsNullOrWhiteSpace($ChefOrg)) {
+        throw "ChefOrganization was not supplied in build-config.json. Required for BgInfo config lookup."
+    }
+    $BgiConfig = Join-Path -Path $BgInfoDir -ChildPath "${ChefOrg}.bgi"
+    if (-not (Test-Path $BgiConfig)) {
+        throw "BgInfo config not found at '$BgiConfig'. Add scripts/BGInfo/${ChefOrg}.bgi for this organization."
+    }
+    Rename-Item -Path $BgiConfig -NewName 'bginfo.bgi' -Force
+    Write-Output "Using BgInfo config: $BgiConfig"
+
+    $BgiDest = Join-Path -Path $BgInfoDir -ChildPath 'bginfo.bgi'
+
+    # EulaAccepted for all Sysinternals tools (HKU\.DEFAULT for new users and System)
+    $SysinternalsEulaPath = 'Registry::HKEY_USERS\.DEFAULT\Software\Sysinternals'
+    $null = New-Item -Path $SysinternalsEulaPath -Force
+    Set-ItemProperty -Path $SysinternalsEulaPath -Name 'EulaAccepted' -Value 1 -Type DWord -Force
+
+    # All Users Startup: run at logon for every user (updates desktop)
+    if (Test-Path $BgiDest) {
+        $StartupScriptPath = Join-Path -Path $BgInfoDir -ChildPath 'Set-BgInfoStartup.ps1'
+        & $StartupScriptPath -BgInfoPath $BgInfoDir -BgiConfig $BgiDest
+        $Elapsed = Get-ElapsedTimeString -StartTime $TranscriptState.StartTime
+        Write-Output "BgInfo installed to $BgInfoDir. Startup shortcut created for all users at logon. Completed in $Elapsed"
     }
     else {
-        throw "BGInfo executable not found: $BgInfoExePath"
+        $Elapsed = Get-ElapsedTimeString -StartTime $TranscriptState.StartTime
+        Write-Output "BgInfo installed to $BgInfoDir. Startup shortcut skipped (no bginfo.bgi). Add config and shortcut manually. Completed in $Elapsed"
     }
-
-    # Copy BGInfo configuration
-    if (Test-Path -Path $BgiConfigPath) {
-        $destConfig = Join-Path -Path $bgInfoDir -ChildPath 'bginfo.bgi'
-        Copy-Item -Path $BgiConfigPath -Destination $destConfig -Force
-        Write-PackerLog -Message "Copied BGInfo config to: $destConfig"
-    }
-    else {
-        throw "BGInfo configuration file not found: $BgiConfigPath"
-    }
-
-    # Register BGInfo to run at logon
-    $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
-    $bgInfoCommand = "`"$destExe`" `"$destConfig`" /timer:0 /nolicprompt /silent"
-    Set-ItemProperty -Path $runKey -Name 'BGInfo' -Value $bgInfoCommand -Type String
-    Write-PackerLog -Message "Registered BGInfo at logon: $bgInfoCommand"
-
-    Write-PackerLog -Message "Completed $scriptName successfully"
 }
 catch {
-    Write-PackerLog -Message "FAILED in ${scriptName}: $_" -Severity Error
-    throw
+    Write-DetailedError -ErrorRecord $_
+    exit 1
 }
 finally {
-    $transcriptFile = Stop-PackerTranscript
-    if ($transcriptFile) {
-        Add-LogToArchive -LogPath $transcriptFile
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
     }
 }
