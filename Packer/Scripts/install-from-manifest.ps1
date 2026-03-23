@@ -6,6 +6,9 @@
     Resolves each package from manifest (same logic as download-installers).
     Runs installers with configured args. Supports EXE (run directly) and MSI (via msiexec).
     Does NOT handle service disable - use dedicated scripts (crowdstrike) for those.
+
+    Idempotent: writes a receipt file per package after successful install. On re-run,
+    packages with existing receipts are skipped.
 .NOTES
     Package format: pkgId (latest) or pkgId@version (pinned).
     InstallerArguments key = pkgId only (no version).
@@ -54,13 +57,29 @@ try {
     $ManifestSections = $Manifest.manifest_section
     $Packages = @($Packages)
 
+    # Receipt directory for idempotency tracking
+    $ReceiptPath = Join-Path -Path $InstallFilesPath -ChildPath '.receipts'
+    if (-not (Test-Path $ReceiptPath)) {
+        $null = New-Item -Path $ReceiptPath -ItemType Directory -Force
+    }
+
     $idx = 0
+    $installed = 0
+    $skipped = 0
     foreach ($pkg in $Packages) {
         $pkg = $pkg.Trim()
         if ([string]::IsNullOrWhiteSpace($pkg)) { continue }
 
         # Parse pkgId from spec (strip @version if present) for config lookup
         $pkgId = if ($pkg -match '^(.+?)@') { $Matches[1].Trim() } else { $pkg }
+
+        # Check for existing receipt (idempotency)
+        $receiptFile = Join-Path -Path $ReceiptPath -ChildPath "$pkgId.installed"
+        if (Test-Path $receiptFile) {
+            Write-Output "Skipping ${pkg}: already installed (receipt exists)"
+            $skipped++
+            continue
+        }
 
         # Get install args (keyed by pkgId only)
         $pkgConfig = $InstallerArgs.$pkgId
@@ -96,10 +115,20 @@ try {
             Write-Output "Installing ${pkg}: $fileName"
             $null = Invoke-PackerInstaller -FilePath $installerPath -ArgumentList $installArgs -InstallerName $pkgId -LogPrefix $logPrefix
         }
+
+        # Write receipt after successful install
+        $receiptContent = @{
+            PackageSpec = $pkg
+            PackageId   = $pkgId
+            FileName    = $fileName
+            InstalledAt = (Get-Date -Format 'o')
+        } | ConvertTo-Json
+        $receiptContent | Set-Content -Path $receiptFile -Force
+        $installed++
     }
 
     $Elapsed = Get-ElapsedTimeString -StartTime $TranscriptState.StartTime
-    Write-Output "Install-from-manifest completed successfully. Installed $($Packages.Count) package(s). Completed in $Elapsed"
+    Write-Output "Install-from-manifest completed. Installed: $installed, Skipped: $skipped. Completed in $Elapsed"
 
     } # end else (packages to install)
 }
