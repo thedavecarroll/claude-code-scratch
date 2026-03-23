@@ -16,8 +16,8 @@ if (-not (Test-Path $ConfigPath)) {
     Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
     exit 1
 }
-$bootstrap = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-$helperPath = $bootstrap.InstallHelperModulePath
+$BootstrapConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+$helperPath = $BootstrapConfig.InstallHelperModulePath
 if (-not (Test-Path $helperPath)) {
     Write-Error "FATAL: Packer install helper module not found at '$helperPath'. The build cannot continue."
     exit 1

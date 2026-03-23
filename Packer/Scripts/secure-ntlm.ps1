@@ -38,27 +38,27 @@ try {
         @{
             Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
             Name = 'LmCompatibilityLevel'
-            Value = 5
+            Value = 5  # Level 5: Send NTLMv2 only; refuse LM and NTLM
         }
         @{
             Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
             Name = 'NoLMHash'
-            Value = 1
+            Value = 1  # Prevent storage of LAN Manager hash
         }
         @{
             Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
             Name = 'NtlmMinClientSec'
-            Value = 537395248
+            Value = 537395248  # 0x20080030: NTLMv2 session security (signing + sealing + 128-bit encryption)
         }
         @{
             Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
             Name = 'NtlmMinServerSec'
-            Value = 537395248
+            Value = 537395248  # 0x20080030: NTLMv2 session security (signing + sealing + 128-bit encryption)
         }
         @{
             Path = 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
             Name = 'RestrictSendingNTLMTraffic'
-            Value = 2
+            Value = 2  # Deny all NTLM traffic to remote servers
         }
     )
 

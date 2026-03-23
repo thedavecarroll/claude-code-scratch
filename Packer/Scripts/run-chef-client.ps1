@@ -98,15 +98,7 @@ try {
         'chef_environment' = $CurrentChefConfig.ChefEnvironment
     }
 
-    $runList = @()
-    if ($Config.PSObject.Properties['ChefRunList'] -and $Config.ChefRunList) {
-        if ($Config.ChefRunList -is [System.Array]) {
-            $runList += $Config.ChefRunList
-        }
-        else {
-            $runList += @($Config.ChefRunList)
-        }
-    }
+    $runList = @($Config.ChefRunList)
 
     if ($runList.Count -eq 0) {
         throw "ChefRunList must contain at least one entry."
@@ -124,7 +116,8 @@ try {
         }
     }
 
-    $jsonContent = $FirstBoot | ConvertTo-Json -Depth 10
+    $JsonMaxDepth = 10  # Support deeply nested Chef attributes
+    $jsonContent = $FirstBoot | ConvertTo-Json -Depth $JsonMaxDepth
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText("$($ChefConfigDir)\first-boot.json", $jsonContent, $encoding)
 

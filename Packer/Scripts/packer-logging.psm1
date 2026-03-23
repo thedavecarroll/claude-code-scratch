@@ -173,8 +173,6 @@ function Stop-PackerTranscript {
             }
         }
     }
-    finally {
-    }
 }
 
 function Write-DetailedError {

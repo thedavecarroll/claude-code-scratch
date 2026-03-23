@@ -66,39 +66,25 @@ function Get-PendingReboot {
     [CmdletBinding()]
     param()
 
-    $PendingRebootReasons = @()
+    $RegistryChecks = @(
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'; Cmdlet = 'Get-ItemProperty'; Reason = 'Windows Update (Auto Update)' }
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\RebootRequired'; Cmdlet = 'Get-ItemProperty'; Reason = 'Windows Update (RebootRequired)' }
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'; Cmdlet = 'Get-ChildItem'; Reason = 'Component Based Servicing' }
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\PackagesPending'; Cmdlet = 'Get-ItemProperty'; Reason = 'CBS Packages Pending' }
+        @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'; Name = 'PendingFileRenameOperations'; Cmdlet = 'Get-ItemProperty'; Reason = 'Pending File Rename Operations' }
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\Reboot'; Cmdlet = 'Get-ItemProperty'; Reason = 'Windows Update Orchestrator' }
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootInProgress'; Cmdlet = 'Get-ItemProperty'; Reason = 'CBS Reboot In Progress' }
+    )
 
-    if (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired" -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "Windows Update (Auto Update)"
+    $PendingRebootReasons = foreach ($Check in $RegistryChecks) {
+        $params = @{ ErrorAction = 'SilentlyContinue' }
+        if ($Check.Name) { $params['Name'] = $Check.Name }
+        if (& $Check.Cmdlet $Check.Path @params) { $Check.Reason }
     }
 
-    if (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\RebootRequired" -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "Windows Update (RebootRequired)"
-    }
-
-    if (Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "Component Based Servicing"
-    }
-
-    if (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\PackagesPending" -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "CBS Packages Pending"
-    }
-
-    if (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "Pending File Rename Operations"
-    }
-
-    if (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\Reboot" -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "Windows Update Orchestrator"
-    }
-
-    if (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootInProgress" -ErrorAction SilentlyContinue) {
-        $PendingRebootReasons += "CBS Reboot In Progress"
-    }
-
-    return [PSCustomObject]@{
-        IsPending = ($PendingRebootReasons.Count -gt 0)
-        Reasons = $PendingRebootReasons
+    [PSCustomObject]@{
+        IsPending = (@($PendingRebootReasons).Count -gt 0)
+        Reasons   = @($PendingRebootReasons)
     }
 }
 
@@ -266,7 +252,7 @@ try {
 
     Write-Output "Starting EC2Launch sysprep process..."
 
-    if ($Config.SkipSysprep.ToString().ToLower() -eq 'true') {
+    if ([System.Convert]::ToBoolean($Config.SkipSysprep)) {
         Write-Output "SKIP_SYSPREP is set to true. Sysprep will be skipped."
         return
     }
@@ -302,18 +288,18 @@ try {
     Write-Output "Starting system cleanup process..."
 
     # Put CrowdStrike sensor in provisioning mode for sysprep (belt-and-suspenders with NO_START=1)
-    $FalconCtl = 'C:\Program Files\CrowdStrike\falconctl.exe'
-    if (Test-Path $FalconCtl) {
+    $FalconCtlPath = 'C:\Program Files\CrowdStrike\falconctl.exe'
+    if (Test-Path $FalconCtlPath) {
         Write-Output "Setting CrowdStrike sensor to provisioning mode..."
-        & $FalconCtl -provisioning
+        & $FalconCtlPath -provisioning
         Write-Output "CrowdStrike sensor set to provisioning mode for sysprep."
     } else {
         Write-Output "CrowdStrike not installed; skipping falconctl -provisioning."
     }
 
-    # Disable Chef scheduled tasks - they use C:\chef\validator.pem which is removed below.
-    $ChefTaskNames = @('Chef-Client', 'Chef-Client-Log-Rotation')
-    foreach ($TaskName in $ChefTaskNames) {
+    # Disable Chef scheduled tasks — they use C:\chef\validator.pem which is removed below
+    $ChefScheduledTasks = @('Chef-Client', 'Chef-Client-Log-Rotation')
+    foreach ($TaskName in $ChefScheduledTasks) {
         $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         if ($Task) {
             Disable-ScheduledTask -TaskName $TaskName
@@ -331,8 +317,8 @@ try {
 
     Write-Output "Setting unattend.xml for sysprep..."
     $UnattendConfigSource = Join-Path -Path $Config.ConfigPath -ChildPath 'unattend.xml'
-    $UnattendConfigDest = 'C:\ProgramData\Amazon\EC2Launch\sysprep\unattend.xml'
-    Copy-Item -Path $UnattendConfigSource -Destination $UnattendConfigDest -Force -ErrorAction Stop
+    $SysprepUnattendDest = 'C:\ProgramData\Amazon\EC2Launch\sysprep\unattend.xml'
+    Copy-Item -Path $UnattendConfigSource -Destination $SysprepUnattendDest -Force -ErrorAction Stop
 
     Write-Output "Resetting EC2Launch agent state..."
     try {

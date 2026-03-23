@@ -19,8 +19,8 @@ if (-not (Test-Path $ConfigPath)) {
     Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
     exit 1
 }
-$bootstrap = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-$helperPath = $bootstrap.InstallHelperModulePath
+$BootstrapConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+$helperPath = $BootstrapConfig.InstallHelperModulePath
 if (-not (Test-Path $helperPath)) {
     Write-Error "FATAL: Packer install helper module not found at '$helperPath'. The build cannot continue."
     exit 1
@@ -53,23 +53,16 @@ try {
         throw "Manifest not found at '$ManifestPath'. Ensure download-installers.ps1 has run first."
     }
     $Manifest = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
-    $sections = $Manifest.manifest_section
-
-    if ($Packages -isnot [System.Array]) {
-        $Packages = @($Packages)
-    }
+    $ManifestSections = $Manifest.manifest_section
+    $Packages = @($Packages)
 
     $idx = 0
     foreach ($pkg in $Packages) {
         $pkg = $pkg.Trim()
         if ([string]::IsNullOrWhiteSpace($pkg)) { continue }
 
-        $pkgId = $pkg
-        $requestedVersion = $null
-        if ($pkg -match '^(.+?)@(.+)$') {
-            $pkgId = $Matches[1].Trim()
-            $requestedVersion = $Matches[2].Trim()
-        }
+        # Parse pkgId from spec (strip @version if present) for config lookup
+        $pkgId = if ($pkg -match '^(.+?)@') { $Matches[1].Trim() } else { $pkg }
 
         # Get install args (keyed by pkgId only)
         $pkgConfig = $InstallerArgs.$pkgId
@@ -79,56 +72,12 @@ try {
         $installArgs = $pkgConfig.args
         $useMsiexec = ($pkgConfig.executable -eq 'msiexec')
 
-        # Resolve file from manifest (same logic as download-installers)
-        $s3Key = $null
-        $resolved = $false
-
-        if ($requestedVersion) {
-            foreach ($section in $sections) {
-                $sectionFiles = $section.files
-                if (-not $sectionFiles) { continue }
-                $productPath = "/$pkgId/"
-                $entry = $sectionFiles | Where-Object {
-                    $_.s3_key -and $_.s3_key -like "*$productPath*" -and
-                    $_.version -and $_.version.ToString() -eq $requestedVersion -and
-                    (($_.arch -eq '64') -or [string]::IsNullOrWhiteSpace($_.arch))
-                } | Select-Object -First 1
-                if (-not $entry) {
-                    $entry = $sectionFiles | Where-Object {
-                        $_.s3_key -and $_.s3_key -like "*$productPath*" -and
-                        $_.version -and $_.version.ToString() -eq $requestedVersion
-                    } | Select-Object -First 1
-                }
-                if ($entry -and $entry.s3_key) {
-                    $s3Key = $entry.s3_key
-                    $resolved = $true
-                    break
-                }
-            }
-            if (-not $resolved) {
-                throw "Package '$pkgId' version '$requestedVersion' not found in manifest."
-            }
+        # Resolve S3 key from manifest via shared helper
+        $resolvedKeys = Resolve-ManifestPackage -PackageSpec $pkg -ManifestSections $ManifestSections
+        if (-not $resolvedKeys -or $resolvedKeys.Count -eq 0) {
+            throw "Package '$pkg' not found in manifest."
         }
-        else {
-            foreach ($section in $sections) {
-                $latest = $section.latest
-                if (-not $latest -or -not $latest.PSObject.Properties[$pkgId]) { continue }
-                $product = $latest.$pkgId
-                $files = $product.files
-                if ($files) {
-                    $entry = $files | Where-Object { ($_.arch -eq '64') -or ([string]::IsNullOrWhiteSpace($_.arch)) } | Select-Object -First 1
-                    if ($entry -and $entry.s3_key) {
-                        $s3Key = $entry.s3_key
-                        $resolved = $true
-                        break
-                    }
-                }
-            }
-            if (-not $resolved) {
-                throw "Package '$pkgId' (latest) not found in manifest."
-            }
-        }
-
+        $s3Key = $resolvedKeys[0]
         $fileName = Split-Path -Path $s3Key -Leaf
         $installerPath = Join-Path -Path $InstallFilesPath -ChildPath $fileName
 

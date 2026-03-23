@@ -71,6 +71,7 @@ function Invoke-WaitForMsiexec {
     $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $WaitCount = 0
     $LastDisplayedInstalling = $null
+    # Decreasing backoff: gives long-running MSIs time, then tightens polling
     $StepSeconds = @(60, 45, 30, 15)
     while (Get-Process -Name msiexec -ErrorAction SilentlyContinue) {
         if ($Stopwatch.Elapsed -gt $Timeout) {
@@ -116,7 +117,7 @@ function Invoke-PackerInstaller {
         [string]$FilePath,
 
         [Parameter(Mandatory)]
-        [array]$ArgumentList,
+        [string[]]$ArgumentList,
 
         [Parameter(Mandatory)]
         [string]$InstallerName,
@@ -129,8 +130,16 @@ function Invoke-PackerInstaller {
     $StdoutPath = Join-Path -Path $LogDir -ChildPath "${LogPrefix}-installer-stdout.log"
     $StderrPath = Join-Path -Path $LogDir -ChildPath "${LogPrefix}-installer-stderr.log"
 
-    $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow `
-        -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath
+    $startParams = @{
+        FilePath               = $FilePath
+        ArgumentList           = $ArgumentList
+        Wait                   = $true
+        PassThru               = $true
+        NoNewWindow            = $true
+        RedirectStandardOutput = $StdoutPath
+        RedirectStandardError  = $StderrPath
+    }
+    $proc = Start-Process @startParams
 
     if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
         throw "$InstallerName installation failed with exit code $($proc.ExitCode)."
@@ -156,4 +165,76 @@ function Invoke-PackerInstaller {
     return $proc
 }
 
-Export-ModuleMember -Function Get-InstallFilesPath, Find-PackerInstaller, Invoke-WaitForMsiexec, Invoke-PackerInstaller
+function Resolve-ManifestPackage {
+    <#
+    .SYNOPSIS
+        Resolves a package spec ("pkgId" or "pkgId@version") to S3 keys from manifest sections.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$PackageSpec,
+
+        [Parameter(Mandatory)]
+        [psobject[]]$ManifestSections
+    )
+
+    $PackageSpec = $PackageSpec.Trim()
+    if ([string]::IsNullOrWhiteSpace($PackageSpec)) { return @() }
+
+    $pkgId = $PackageSpec
+    $requestedVersion = $null
+    if ($PackageSpec -match '^(.+?)@(.+)$') {
+        $pkgId = $Matches[1].Trim()
+        $requestedVersion = $Matches[2].Trim()
+    }
+
+    $resolvedKeys = @()
+
+    if ($requestedVersion) {
+        # Pinned version: search section files (prefer 64-bit)
+        $productPath = "/$pkgId/"
+        foreach ($section in $ManifestSections) {
+            if (-not $section.files) { continue }
+            $entries = $section.files | Where-Object {
+                $_.s3_key -and $_.s3_key -like "*$productPath*" -and
+                $_.version -and $_.version.ToString() -eq $requestedVersion -and
+                (($_.arch -eq '64') -or [string]::IsNullOrWhiteSpace($_.arch))
+            }
+            if (-not $entries -or @($entries).Count -eq 0) {
+                $entries = $section.files | Where-Object {
+                    $_.s3_key -and $_.s3_key -like "*$productPath*" -and
+                    $_.version -and $_.version.ToString() -eq $requestedVersion
+                }
+            }
+            if ($entries) {
+                foreach ($entry in $entries) {
+                    if ($entry.s3_key) { $resolvedKeys += $entry.s3_key }
+                }
+                break
+            }
+        }
+        if ($resolvedKeys.Count -eq 0) {
+            throw "Package '$pkgId' version '$requestedVersion' not found in manifest."
+        }
+    }
+    else {
+        # Latest: use section.latest.<pkgId>.files
+        foreach ($section in $ManifestSections) {
+            $latest = $section.latest
+            if (-not $latest -or -not $latest.PSObject.Properties[$pkgId]) { continue }
+            $files = $latest.$pkgId.files
+            if ($files) {
+                $entries = @($files | Where-Object { ($_.arch -eq '64') -or [string]::IsNullOrWhiteSpace($_.arch) })
+                foreach ($entry in $entries) {
+                    if ($entry.s3_key) { $resolvedKeys += $entry.s3_key }
+                }
+                if ($resolvedKeys.Count -gt 0) { break }
+            }
+        }
+    }
+
+    return $resolvedKeys
+}
+
+Export-ModuleMember -Function Get-InstallFilesPath, Find-PackerInstaller, Invoke-WaitForMsiexec, Invoke-PackerInstaller, Resolve-ManifestPackage

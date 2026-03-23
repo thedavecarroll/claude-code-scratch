@@ -103,75 +103,13 @@ try {
     if ($ManifestPackages -and (Test-Path (Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'))) {
         $ManifestPath = Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'
         $Manifest = Get-Content -Path $ManifestPath -Raw | ConvertFrom-Json
-        $sections = $Manifest.manifest_section
-        if ($ManifestPackages -isnot [System.Array]) {
-            $ManifestPackages = @($ManifestPackages)
-        }
+        $ManifestSections = $Manifest.manifest_section
+        $ManifestPackages = @($ManifestPackages)
         foreach ($pkg in $ManifestPackages) {
-            $pkg = $pkg.Trim()
-            if ([string]::IsNullOrWhiteSpace($pkg)) { continue }
-
-            $pkgId = $pkg
-            $requestedVersion = $null
-            if ($pkg -match '^(.+?)@(.+)$') {
-                $pkgId = $Matches[1].Trim()
-                $requestedVersion = $Matches[2].Trim()
-            }
-
-            $resolved = $false
-            if ($requestedVersion) {
-                # Search section-level files for version match (prefer arch 64)
-                foreach ($section in $sections) {
-                    $sectionFiles = $section.files
-                    if (-not $sectionFiles) { continue }
-                    $productPath = "/$pkgId/"
-                    $entries = $sectionFiles | Where-Object {
-                        $_.s3_key -and $_.s3_key -like "*$productPath*" -and
-                        $_.version -and $_.version.ToString() -eq $requestedVersion -and
-                        (($_.arch -eq '64') -or [string]::IsNullOrWhiteSpace($_.arch))
-                    }
-                    if (-not $entries -or $entries.Count -eq 0) {
-                        $entries = $sectionFiles | Where-Object {
-                            $_.s3_key -and $_.s3_key -like "*$productPath*" -and
-                            $_.version -and $_.version.ToString() -eq $requestedVersion
-                        }
-                    }
-                    if ($entries) {
-                        foreach ($entry in $entries) {
-                            if ($entry -and $entry.s3_key) {
-                                $ManifestPackageKeys += $entry.s3_key
-                                Write-Output "Resolved manifest package '$pkgId'@$requestedVersion -> $($entry.s3_key)"
-                            }
-                        }
-                        $resolved = $true
-                        break
-                    }
-                }
-                if (-not $resolved) {
-                    throw "Package '$pkgId' version '$requestedVersion' not found in manifest. Check section.files for matching entry."
-                }
-            }
-            else {
-                # Use latest (existing logic)
-                foreach ($section in $sections) {
-                    $latest = $section.latest
-                    if (-not $latest -or -not $latest.PSObject.Properties[$pkgId]) { continue }
-                    $product = $latest.$pkgId
-                    $files = $product.files
-                    if ($files) {
-                        $entries = @($files | Where-Object { ($_.arch -eq '64') -or ([string]::IsNullOrWhiteSpace($_.arch)) })
-                        foreach ($entry in $entries) {
-                            if ($entry -and $entry.s3_key) {
-                                $ManifestPackageKeys += $entry.s3_key
-                                Write-Output "Resolved manifest package '$pkgId' (latest) -> $($entry.s3_key)"
-                            }
-                        }
-                        if ($entries -and $entries.Count -gt 0) {
-                            $resolved = $true
-                            break
-                        }
-                    }
-                }
+            $keys = Resolve-ManifestPackage -PackageSpec $pkg -ManifestSections $ManifestSections
+            foreach ($key in $keys) {
+                $ManifestPackageKeys += $key
+                Write-Output "Resolved manifest package '$pkg' -> $key"
             }
         }
     }
