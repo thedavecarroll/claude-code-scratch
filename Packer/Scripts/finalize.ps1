@@ -61,9 +61,14 @@ try {
 
     # Run DISM component cleanup
     Write-PackerLog -Message "Running DISM component cleanup"
-    $dismResult = Start-Process -FilePath 'dism.exe' `
-        -ArgumentList '/Online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' `
-        -Wait -PassThru -NoNewWindow
+    $dismParams = @{
+        FilePath     = 'dism.exe'
+        ArgumentList = '/Online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase'
+        Wait         = $true
+        PassThru     = $true
+        NoNewWindow  = $true
+    }
+    $dismResult = Start-Process @dismParams
     Write-PackerLog -Message "DISM cleanup completed with exit code: $($dismResult.ExitCode)"
 
     # Clear event logs

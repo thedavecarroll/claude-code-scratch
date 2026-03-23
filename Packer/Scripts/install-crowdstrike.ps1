@@ -24,7 +24,7 @@ param(
     [Parameter()]
     [string]$InstallerPath = 'C:\PackerInstallers\CrowdStrikeWindowsSensor.exe',
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [string]$CID
 )

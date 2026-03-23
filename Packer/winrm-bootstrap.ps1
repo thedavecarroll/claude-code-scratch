@@ -36,12 +36,15 @@ try {
     # Create a self-signed certificate for HTTPS
     Write-PackerLog -Message "Creating self-signed certificate for WinRM HTTPS"
     $hostname = $env:COMPUTERNAME
-    $cert = New-SelfSignedCertificate -DnsName $hostname `
-        -CertStoreLocation 'Cert:\LocalMachine\My' `
-        -KeyLength 2048 `
-        -KeyAlgorithm RSA `
-        -HashAlgorithm SHA256 `
-        -NotAfter (Get-Date).AddYears(1)
+    $certParams = @{
+        DnsName            = $hostname
+        CertStoreLocation  = 'Cert:\LocalMachine\My'
+        KeyLength          = 2048
+        KeyAlgorithm       = 'RSA'
+        HashAlgorithm      = 'SHA256'
+        NotAfter           = (Get-Date).AddYears(1)
+    }
+    $cert = New-SelfSignedCertificate @certParams
 
     Write-PackerLog -Message "Certificate thumbprint: $($cert.Thumbprint)"
 
@@ -54,8 +57,14 @@ try {
 
     # Create HTTPS listener
     Write-PackerLog -Message "Creating WinRM HTTPS listener"
-    New-Item -Path 'WSMan:\localhost\Listener' -Transport HTTPS `
-        -Address '*' -CertificateThumbPrint $cert.Thumbprint -Force | Out-Null
+    $listenerParams = @{
+        Path                 = 'WSMan:\localhost\Listener'
+        Transport            = 'HTTPS'
+        Address              = '*'
+        CertificateThumbPrint = $cert.Thumbprint
+        Force                = $true
+    }
+    New-Item @listenerParams | Out-Null
 
     # Configure WinRM settings
     Write-PackerLog -Message "Configuring WinRM settings"
@@ -70,12 +79,15 @@ try {
     if ($existingRule) {
         Remove-NetFirewallRule -Name 'WinRM-HTTPS-In'
     }
-    New-NetFirewallRule -Name 'WinRM-HTTPS-In' `
-        -DisplayName 'WinRM HTTPS Inbound' `
-        -Direction Inbound `
-        -Protocol TCP `
-        -LocalPort 5986 `
-        -Action Allow | Out-Null
+    $firewallParams = @{
+        Name        = 'WinRM-HTTPS-In'
+        DisplayName = 'WinRM HTTPS Inbound'
+        Direction   = 'Inbound'
+        Protocol    = 'TCP'
+        LocalPort   = 5986
+        Action      = 'Allow'
+    }
+    New-NetFirewallRule @firewallParams | Out-Null
 
     # Restart WinRM to apply changes
     Write-PackerLog -Message "Restarting WinRM service"

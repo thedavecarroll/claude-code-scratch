@@ -35,7 +35,7 @@ function Start-PackerTranscript {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
         [string]$ScriptName,
 
@@ -107,7 +107,7 @@ function Add-LogToArchive {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
         [string]$LogPath,
 
@@ -153,7 +153,7 @@ function Write-PackerLog {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
         [string]$Message,
 

@@ -47,8 +47,13 @@ try {
 
     # Disable directory browsing
     Write-PackerLog -Message "Disabling directory browsing"
-    Set-WebConfigurationProperty -Filter '/system.webServer/directoryBrowse' `
-        -PSPath 'IIS:\' -Name 'enabled' -Value $false
+    $dirBrowseParams = @{
+        Filter = '/system.webServer/directoryBrowse'
+        PSPath = 'IIS:\'
+        Name   = 'enabled'
+        Value  = $false
+    }
+    Set-WebConfigurationProperty @dirBrowseParams
 
     # Disable TLS 1.0
     Write-PackerLog -Message "Disabling TLS 1.0"
