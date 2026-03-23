@@ -16,29 +16,21 @@
 
 #Requires -RunAsAdministrator
 
-$ErrorActionPreference = 'Stop'
-
-# Load packer-logging
-$configPath = 'C:\Packer\Config\build-config.json'
-if (-not (Test-Path $configPath)) {
-    Write-Output "ERROR: Build config not found at $configPath"
+# Load build configuration from file
+$ConfigPath = 'C:\Packer\Config\build-config.json'
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
     exit 1
 }
+$Config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
 
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
-$loggingModule = $config.LoggingModulePath
-if (Test-Path $loggingModule) {
-    Import-Module $loggingModule -Force
-}
-
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', 'TranscriptState', Justification = 'Used in finally block')]
 $TranscriptState = $null
 try {
+    $ErrorActionPreference = 'Stop'
+    Import-Module -Name $Config.LoggingModulePath -Force
     $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'secure-iis.ps1'
 
-    Write-Output "========================================"
-    Write-Output "Secure IIS"
-    Write-Output "========================================"
+    Write-Output "Applying IIS security hardening..."
 
     # Check if IIS is installed
     $iisInstalled = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue | Where-Object { $_.Installed }
@@ -93,8 +85,8 @@ try {
         $serverManager.Dispose()
     }
     catch {
-        Write-Output "Warning: Failed to remove Default Web Site: $_"
-        Write-Output "This is not critical - continuing..."
+        Write-Warning "Failed to remove Default Web Site: $_"
+        Write-Warning "This is not critical - continuing..."
     }
 
     # Single list config call - system.webServer contains httpProtocol, httpErrors, directoryBrowse
@@ -111,7 +103,7 @@ try {
         if ($LASTEXITCODE -eq 0) {
             Write-Output "X-Powered-By header removed successfully"
         } else {
-            Write-Output "Warning: Failed to remove X-Powered-By header: $removeHeaderResult"
+            Write-Warning "Failed to remove X-Powered-By header: $removeHeaderResult"
         }
     } else {
         Write-Output "X-Powered-By header not present (already removed)"
@@ -128,7 +120,7 @@ try {
         if ($LASTEXITCODE -eq 0) {
             Write-Output "Error mode set to DetailedLocalOnly"
         } else {
-            Write-Output "Warning: Failed to set error mode: $errorModeResult"
+            Write-Warning "Failed to set error mode: $errorModeResult"
         }
     } else {
         Write-Output "Error mode already DetailedLocalOnly"
@@ -146,7 +138,7 @@ try {
         if ($LASTEXITCODE -eq 0) {
             Write-Output "Directory browsing disabled"
         } else {
-            Write-Output "Warning: Failed to disable directory browsing: $dirBrowseResult"
+            Write-Warning "Failed to disable directory browsing: $dirBrowseResult"
         }
     } else {
         Write-Output "Directory browsing already disabled"
@@ -155,10 +147,7 @@ try {
     # -------------------------------------------------------------------------
     # Summary
     # -------------------------------------------------------------------------
-    Write-Output ""
-    Write-Output "========================================"
     Write-Output "IIS security hardening completed"
-    Write-Output "========================================"
 }
 catch {
     Write-DetailedError -ErrorRecord $_
