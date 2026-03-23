@@ -13,24 +13,22 @@
 [CmdletBinding()]
 param()
 
-# Load modules (install-helper imports packer-logging)
-$ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
-if (-not (Test-Path $ConfigPath)) {
-    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
-    exit 1
-}
-$BootstrapConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-$helperPath = $BootstrapConfig.InstallHelperModulePath
-if (-not (Test-Path $helperPath)) {
-    Write-Error "FATAL: Packer install helper module not found at '$helperPath'. The build cannot continue."
-    exit 1
-}
-Import-Module -Name $helperPath -Force
-$Config = Get-PackerBuildConfig
-
+$ErrorActionPreference = 'Stop'
 $TranscriptState = $null
+
 try {
-    $ErrorActionPreference = 'Stop'
+    # Load modules (install-helper imports packer-logging)
+    $ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
+    if (-not (Test-Path $ConfigPath)) {
+        throw "Build configuration file not found at '$ConfigPath'. The build cannot continue."
+    }
+    $BootstrapConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+    $helperPath = $BootstrapConfig.InstallHelperModulePath
+    if (-not (Test-Path $helperPath)) {
+        throw "Packer install helper module not found at '$helperPath'. The build cannot continue."
+    }
+    Import-Module -Name $helperPath -Force
+    $Config = Get-PackerBuildConfig
     $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'install-from-manifest.ps1'
 
     $InstallFilesPath = Get-InstallFilesPath -Config $Config
@@ -43,10 +41,10 @@ try {
         $InstallerArgs = $Config.InstallerArguments
     }
 
-    if (-not $Packages -or $Packages.Count -eq 0) {
+    if (-not $Packages -or @($Packages).Count -eq 0) {
         Write-Output "InstallFromManifestPackages is empty; nothing to install."
-        exit 0
     }
+    else {
 
     $ManifestPath = Join-Path -Path $InstallFilesPath -ChildPath 'manifest.json'
     if (-not (Test-Path $ManifestPath)) {
@@ -102,6 +100,8 @@ try {
 
     $Elapsed = Get-ElapsedTimeString -StartTime $TranscriptState.StartTime
     Write-Output "Install-from-manifest completed successfully. Installed $($Packages.Count) package(s). Completed in $Elapsed"
+
+    } # end else (packages to install)
 }
 catch {
     Write-DetailedError -ErrorRecord $_

@@ -11,23 +11,21 @@
 [CmdletBinding()]
 param()
 
-$ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
-if (-not (Test-Path $ConfigPath)) {
-    Write-Error "FATAL: Build configuration file not found at '$ConfigPath'. The build cannot continue."
-    exit 1
-}
-$BootstrapConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-$helperPath = $BootstrapConfig.InstallHelperModulePath
-if (-not (Test-Path $helperPath)) {
-    Write-Error "FATAL: Packer install helper module not found at '$helperPath'. The build cannot continue."
-    exit 1
-}
-Import-Module -Name $helperPath -Force
-$Config = Get-PackerBuildConfig
-
+$ErrorActionPreference = 'Stop'
 $TranscriptState = $null
+
 try {
-    $ErrorActionPreference = 'Stop'
+    $ConfigPath = Join-Path 'C:\Packer\Config' 'build-config.json'
+    if (-not (Test-Path $ConfigPath)) {
+        throw "Build configuration file not found at '$ConfigPath'. The build cannot continue."
+    }
+    $BootstrapConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+    $helperPath = $BootstrapConfig.InstallHelperModulePath
+    if (-not (Test-Path $helperPath)) {
+        throw "Packer install helper module not found at '$helperPath'. The build cannot continue."
+    }
+    Import-Module -Name $helperPath -Force
+    $Config = Get-PackerBuildConfig
     $TranscriptState = Start-PackerTranscript -Invocation $MyInvocation -OriginalScriptName 'install-chef-client.ps1'
 
     $InstallFilesPath = Get-InstallFilesPath -Config $Config

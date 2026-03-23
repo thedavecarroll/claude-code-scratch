@@ -158,20 +158,38 @@ encrypted_data_bag_secret '$ChefConfigDir\encrypted_data_bag_secret'
     & $ChefClientPath @ChefArgs
     $chefExitCode = $LASTEXITCODE
 
+    # Chef exit codes: 0 = success, 3010 = reboot required (Windows), 35 = reboot requested by recipe
+    $RebootExitCodes = @(3010, 35)
+    $RebootRequired = $RebootExitCodes -contains $chefExitCode
+
     if ($chefExitCode -eq 0) {
         Write-Output "Chef Client run completed successfully."
     }
-    elseif ($chefExitCode -eq 3010) {
-        Write-Output "Chef Client run successful: A reboot is required (Exit Code 3010)."
-        # We exit with 0 so Packer doesn't mark this specific provisioner as "Failed"
-        exit 0
+    elseif ($RebootRequired) {
+        Write-Output "Chef Client run completed. Reboot required (exit code $chefExitCode)."
     }
     else {
         throw "Chef Client run failed with exit code: $chefExitCode"
     }
 
+    # Stop transcript and archive logs BEFORE potential reboot
+    if ($TranscriptState) {
+        Stop-PackerTranscript -TranscriptState $TranscriptState
+        $TranscriptState = $null
+    }
+
+    if ($RebootRequired) {
+        Write-Output "Initiating system restart for pending Windows features..."
+        $RebootDelaySec = 15
+        shutdown.exe /r /t $RebootDelaySec /c "Packer: Chef Client requested reboot for Windows features (exit code $chefExitCode)"
+        # Exit 0 so Packer does not mark this provisioner as failed.
+        # Packer's communicator will detect WinRM disconnect and wait for reconnect.
+        exit 0
+    }
+
 }
 catch {
+    $ChefConfigDir = 'C:\chef'
     $StackTracePath = Join-Path $ChefConfigDir 'cache\chef-stacktrace.out'
     if (Test-Path $StackTracePath) {
         Write-Output "--- Chef client stacktrace ---"
