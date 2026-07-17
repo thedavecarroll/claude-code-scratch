@@ -1,0 +1,974 @@
+<title>The Measure — Resolution Bench</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #ece7d9;
+    --surface: #f5f1e5;
+    --surface-2: #ebe5d5;
+    --ink: #23201a;
+    --muted: #6b6656;
+    --faint: #928c79;
+    --line: #d4ccb8;
+    --line-strong: #b8ae95;
+    --accent: #8a6015;
+    --accent-soft: #b58a35;
+    --good: #3e7a4f;
+    --neutral: #566779;
+    --bad: #9a3324;
+    /* trauma ramp 1..5 */
+    --t1: #4e8d5f;
+    --t2: #7f8a34;
+    --t3: #b5842a;
+    --t4: #bf5f28;
+    --t5: #9a3324;
+    --shadow: 0 1px 0 rgba(255,255,255,.5), 0 10px 30px -18px rgba(30,26,14,.5);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10131a;
+      --surface: #171b23;
+      --surface-2: #1d222c;
+      --ink: #e7e3d6;
+      --muted: #8b8f98;
+      --faint: #656b76;
+      --line: #262c37;
+      --line-strong: #333a47;
+      --accent: #c99b3f;
+      --accent-soft: #d8b25f;
+      --good: #6dba88;
+      --neutral: #8aa0b4;
+      --bad: #d06450;
+      --t1: #5aa876;
+      --t2: #a8b24a;
+      --t3: #d0a23e;
+      --t4: #d9772f;
+      --t5: #d06450;
+      --shadow: 0 1px 0 rgba(255,255,255,.03), 0 18px 40px -22px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #ece7d9; --surface: #f5f1e5; --surface-2: #ebe5d5; --ink: #23201a;
+    --muted: #6b6656; --faint: #928c79; --line: #d4ccb8; --line-strong: #b8ae95;
+    --accent: #8a6015; --accent-soft: #b58a35; --good: #3e7a4f; --neutral: #566779;
+    --bad: #9a3324; --t1:#4e8d5f; --t2:#7f8a34; --t3:#b5842a; --t4:#bf5f28; --t5:#9a3324;
+    --shadow: 0 1px 0 rgba(255,255,255,.5), 0 10px 30px -18px rgba(30,26,14,.5);
+  }
+  :root[data-theme="dark"] {
+    --bg: #10131a; --surface: #171b23; --surface-2: #1d222c; --ink: #e7e3d6;
+    --muted: #8b8f98; --faint: #656b76; --line: #262c37; --line-strong: #333a47;
+    --accent: #c99b3f; --accent-soft: #d8b25f; --good: #6dba88; --neutral: #8aa0b4;
+    --bad: #d06450; --t1:#5aa876; --t2:#a8b24a; --t3:#d0a23e; --t4:#d9772f; --t5:#d06450;
+    --shadow: 0 1px 0 rgba(255,255,255,.03), 0 18px 40px -22px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: clamp(16px, 3vw, 40px); }
+
+  /* ---- Masthead ---- */
+  header.mast { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+  .brand { display: flex; flex-direction: column; gap: 6px; }
+  .brand .eyebrow { font-size: 11px; letter-spacing: .32em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .brand h1 {
+    font-family: var(--serif); font-weight: 600; margin: 0;
+    font-size: clamp(30px, 5vw, 50px); letter-spacing: .01em; line-height: .98; text-wrap: balance;
+  }
+  .brand .sub { color: var(--muted); font-size: 13px; max-width: 46ch; }
+  .theme-btn {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); background: var(--surface); border: 1px solid var(--line-strong);
+    padding: 8px 12px; border-radius: 2px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center;
+  }
+  .theme-btn:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* ---- Mode tabs ---- */
+  .modes { display: flex; gap: 0; margin: 24px 0 22px; border: 1px solid var(--line-strong); border-radius: 3px; overflow: hidden; background: var(--surface); width: fit-content; max-width: 100%; }
+  .modes button {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase;
+    padding: 11px 20px; background: transparent; border: 0; color: var(--muted); cursor: pointer;
+    border-right: 1px solid var(--line); white-space: nowrap;
+  }
+  .modes button:last-child { border-right: 0; }
+  .modes button[aria-selected="true"] { background: var(--accent); color: #12100a; font-weight: 600; }
+
+  /* ---- Console grid ---- */
+  .console { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 22px; align-items: start; }
+  @media (max-width: 860px) { .console { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; box-shadow: var(--shadow); }
+  .panel > .panel-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    padding: 14px 18px; border-bottom: 1px solid var(--line);
+  }
+  .panel-head .title { font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .panel-head .hint { font-size: 11px; color: var(--faint); }
+  .panel-body { padding: 16px 18px 20px; }
+
+  /* ---- Form controls ---- */
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  @media (max-width: 480px){ .grid2 { grid-template-columns: 1fr; } }
+  label.lbl { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  label.lbl .tag { color: var(--faint); text-transform: none; letter-spacing: 0; font-size: 11px; }
+  input[type="number"], select {
+    font-family: var(--mono); font-size: 15px; color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 2px;
+    padding: 9px 10px; width: 100%; -moz-appearance: textfield;
+  }
+  input[type="number"]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  select { cursor: pointer; }
+  .check { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink); cursor: pointer; letter-spacing: .02em; }
+  .check input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .check .edge { color: var(--accent); font-weight: 600; }
+  fieldset { border: 1px dashed var(--line-strong); border-radius: 3px; padding: 12px 14px 14px; margin: 0 0 14px; }
+  fieldset legend { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); padding: 0 6px; }
+  .seg { display: flex; gap: 0; border: 1px solid var(--line-strong); border-radius: 2px; overflow: hidden; }
+  .seg button { flex: 1; font-family: var(--mono); font-size: 12px; padding: 8px 6px; background: var(--surface-2); color: var(--muted); border: 0; border-right: 1px solid var(--line); cursor: pointer; letter-spacing: .04em; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #12100a; font-weight: 600; }
+  .note-inline { font-size: 11.5px; color: var(--faint); font-family: var(--serif); font-style: italic; margin-top: 4px; line-height: 1.4; }
+
+  .throw-row { display: flex; gap: 12px; align-items: stretch; margin-top: 18px; }
+  .btn-throw {
+    flex: 1; font-family: var(--mono); font-size: 16px; letter-spacing: .18em; text-transform: uppercase; font-weight: 600;
+    color: #12100a; background: linear-gradient(180deg, var(--accent-soft), var(--accent));
+    border: 1px solid color-mix(in srgb, var(--accent) 60%, #000); border-radius: 3px; padding: 15px; cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 6px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  .btn-throw:hover { filter: brightness(1.05); }
+  .btn-throw:active { transform: translateY(1px); }
+  .btn-ghost { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 16px; cursor: pointer; }
+  .btn-ghost:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* ---- Readout ---- */
+  .readout { display: flex; flex-direction: column; gap: 14px; }
+  .empty-state { color: var(--faint); font-family: var(--serif); font-style: italic; font-size: 15px; padding: 30px 4px; text-align: center; line-height: 1.6; }
+
+  .gauge { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; box-shadow: var(--shadow); position: relative; }
+  .gauge .stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--faint); }
+  .gauge-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px 12px 20px; border-bottom: 1px solid var(--line); }
+  .gauge-head .g-name { font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+  .gauge-head .g-q { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--faint); }
+  .gauge-body { padding: 14px 16px 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .verdict { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .verdict .big { font-size: clamp(24px, 4.5vw, 34px); font-weight: 600; letter-spacing: .01em; line-height: 1; }
+  .verdict .band { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; padding: 3px 9px; border-radius: 2px; border: 1px solid currentColor; }
+  .verdict .rank-num { font-family: var(--serif); }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  .steps li { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; }
+  .steps li .op { color: var(--faint); flex: none; width: 1.2em; text-align: center; }
+  .steps li b { color: var(--ink); font-weight: 600; }
+  .steps li.final { color: var(--ink); border-top: 1px dashed var(--line-strong); margin-top: 4px; padding-top: 6px; }
+
+  /* dice */
+  .dice { display: flex; gap: 8px; }
+  .die { width: 42px; height: 42px; border-radius: 5px; display: grid; place-items: center; font-size: 19px; font-weight: 600; background: var(--surface-2); border: 1px solid var(--line-strong); position: relative; }
+  .die .dl { position: absolute; top: 3px; left: 5px; font-size: 8px; letter-spacing: .1em; color: var(--faint); }
+  .die.o { color: var(--ink); } .die.y { color: var(--ink); } .die.e { color: var(--ink); }
+
+  .trauma-line { font-family: var(--serif); font-size: 15px; line-height: 1.4; }
+  .trauma-line .form { font-style: italic; }
+  .cond-chip { display: inline-block; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--bad); border: 1px solid var(--bad); border-radius: 2px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+
+  /* colored helpers */
+  .c-good { color: var(--good); } .c-bad { color: var(--bad); } .c-neutral { color: var(--neutral); }
+  .t1{color:var(--t1)} .t2{color:var(--t2)} .t3{color:var(--t3)} .t4{color:var(--t4)} .t5{color:var(--t5)}
+  .bg-good{background:var(--good)} .bg-bad{background:var(--bad)} .bg-neutral{background:var(--neutral)} .bg-faint{background:var(--faint)}
+  .bg-t1{background:var(--t1)} .bg-t2{background:var(--t2)} .bg-t3{background:var(--t3)} .bg-t4{background:var(--t4)} .bg-t5{background:var(--t5)}
+
+  /* reference strip */
+  .ref { margin-top: 34px; border-top: 1px solid var(--line); padding-top: 20px; }
+  .ref h2 { font-family: var(--serif); font-size: 16px; margin: 0 0 14px; letter-spacing: .02em; }
+  .ref-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .ref-card { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 13px 15px; }
+  .ref-card h3 { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin: 0 0 9px; }
+  .ref-card table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .ref-card td { padding: 2px 0; color: var(--muted); vertical-align: top; }
+  .ref-card td:last-child { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; padding-left: 10px; }
+  .ref-card p { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  .ref-card p:last-child { margin-bottom: 0; }
+  footer.foot { margin-top: 28px; color: var(--faint); font-size: 11.5px; font-family: var(--serif); font-style: italic; line-height: 1.5; }
+
+  .hidden { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) {
+    .flash { animation: settle .28s ease-out; }
+    @keyframes settle { from { transform: translateY(-3px); opacity: .3; } to { transform: none; opacity: 1; } }
+  }
+  input[type=number]::-webkit-inner-spin-button { opacity: .4; }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="brand">
+      <span class="eyebrow">Resolution Bench · 3d12</span>
+      <h1>The Measure</h1>
+      <span class="sub">Set the throw, read the instrument. One die asks <em>did it work</em>, one <em>what it delivered</em>, one <em>what it cost</em>. The Handler always knows the TN before throwing.</span>
+    </div>
+    <button class="theme-btn" id="themeBtn" type="button" aria-label="Toggle theme"><span id="themeIcon">◐</span> <span id="themeLabel">Theme</span></button>
+  </header>
+
+  <div class="modes" role="tablist" aria-label="Measure type">
+    <button role="tab" id="tab-skill" aria-selected="true" data-mode="skill">Skill Check</button>
+    <button role="tab" id="tab-combat" aria-selected="false" data-mode="combat">Combat</button>
+    <button role="tab" id="tab-hazard" aria-selected="false" data-mode="hazard">Hazard</button>
+  </div>
+
+  <div class="console">
+    <!-- ============ DECLARE PANEL ============ -->
+    <section class="panel">
+      <div class="panel-head">
+        <span class="title">Declare the Measure</span>
+        <span class="hint" id="declHint">Objective · Yield · Exposure</span>
+      </div>
+      <div class="panel-body">
+
+        <!-- SKILL -->
+        <div id="form-skill">
+          <div class="grid2">
+            <div class="field">
+              <label class="lbl" for="s-tn">Target Number <span class="tag">world</span></label>
+              <input type="number" id="s-tn" value="7" min="1" step="1" />
+            </div>
+            <div class="field">
+              <label class="lbl" for="s-val">Objective value <span class="tag">attr / comp</span></label>
+              <input type="number" id="s-val" value="4" min="0" step="1" />
+            </div>
+          </div>
+          <label class="check" style="margin-bottom:14px"><input type="checkbox" id="s-eo" /> <span>Edge on the Objective value <span class="edge">+2</span></span></label>
+
+          <fieldset>
+            <legend>Yield — the Effect</legend>
+            <div class="grid2">
+              <div class="field" style="margin-bottom:8px">
+                <label class="lbl" for="s-eff">Unaided rating <span class="tag">1–6, caps at 5</span></label>
+                <input type="number" id="s-eff" value="3" min="1" max="6" step="1" />
+              </div>
+              <div class="field" style="margin-bottom:8px">
+                <label class="lbl">&nbsp;</label>
+                <label class="check"><input type="checkbox" id="s-ee" /> <span>Edge on Effect <span class="edge">+2</span></span></label>
+              </div>
+            </div>
+            <label class="check"><input type="checkbox" id="s-2v" checked /> <span>Objective value &amp; Effect are <b>different</b> values <span class="tag" style="color:var(--faint)">(Two-Value Rule)</span></span></label>
+            <div class="note-inline">Unaided Effect caps at 5 — Edge helps below the cap, never past it.</div>
+          </fieldset>
+        </div>
+
+        <!-- COMBAT -->
+        <div id="form-combat" class="hidden">
+          <fieldset>
+            <legend>Attacker</legend>
+            <div class="field" style="margin-bottom:10px">
+              <label class="lbl">Delivery</label>
+              <div class="seg" id="c-armed" role="group">
+                <button type="button" data-v="armed" aria-pressed="true">Armed</button>
+                <button type="button" data-v="unarmed" aria-pressed="false">Unaided</button>
+              </div>
+            </div>
+
+            <div id="c-armed-block">
+              <div class="grid2">
+                <div class="field">
+                  <label class="lbl" for="c-wpn">Weapon</label>
+                  <select id="c-wpn"></select>
+                </div>
+                <div class="field">
+                  <label class="lbl" for="c-ammo">Ammo</label>
+                  <select id="c-ammo">
+                    <option value="fmj">FMJ — baseline</option>
+                    <option value="hp">Hollow point — +1 Eff / −1 PEN</option>
+                    <option value="ap">AP — −1 Eff / +2 PEN</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field" id="c-effrange-wrap hidden">
+                <label class="lbl" for="c-eff">Weapon Effect <span class="tag" id="c-eff-tag">printed</span></label>
+                <input type="number" id="c-eff" value="6" min="1" step="1" />
+              </div>
+              <div class="note-inline" id="c-wpnline">Armed: the weapon's Effect is always the Effect.</div>
+            </div>
+
+            <div id="c-unarmed-block" class="hidden">
+              <div class="grid2">
+                <div class="field" style="margin-bottom:6px">
+                  <label class="lbl" for="c-urating">Unaided rating <span class="tag">1–6, cap 5</span></label>
+                  <input type="number" id="c-urating" value="3" min="1" max="6" step="1" />
+                </div>
+                <div class="field" style="margin-bottom:6px">
+                  <label class="lbl">&nbsp;</label>
+                  <label class="check"><input type="checkbox" id="c-uee" /> <span>Edge on Effect <span class="edge">+2</span></span></label>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid2" style="margin-top:12px">
+              <div class="field" style="margin-bottom:0">
+                <label class="lbl" for="c-tn">Target Number</label>
+                <input type="number" id="c-tn" value="7" min="1" step="1" />
+              </div>
+              <div class="field" style="margin-bottom:0">
+                <label class="lbl" for="c-val">Objective value</label>
+                <input type="number" id="c-val" value="4" min="0" step="1" />
+              </div>
+            </div>
+            <label class="check" style="margin-top:10px"><input type="checkbox" id="c-eo" /> <span>Edge on the Objective value <span class="edge">+2</span></span></label>
+            <div class="field" style="margin:12px 0 0">
+              <label class="lbl">Strike location</label>
+              <div class="seg" id="c-strike" role="group">
+                <button type="button" data-v="normal" aria-pressed="true">Narrated</button>
+                <button type="button" data-v="vitals" aria-pressed="false">Declared · vitals</button>
+              </div>
+              <div class="note-inline">Declared vitals: pay the TN, <b>+1 band</b>, armor bypassed.</div>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Target &amp; defense</legend>
+            <div class="grid2">
+              <div class="field" style="margin-bottom:10px">
+                <label class="lbl" for="c-armor">Armor <span class="tag">rank ↓</span></label>
+                <select id="c-armor">
+                  <option value="none">None</option>
+                  <option value="light">Light −1</option>
+                  <option value="heavy">Heavy −3</option>
+                </select>
+              </div>
+              <div class="field" style="margin-bottom:10px">
+                <label class="lbl" for="c-cover">Cover <span class="tag">rank ↓</span></label>
+                <select id="c-cover">
+                  <option value="none">None</option>
+                  <option value="soft">Soft −1</option>
+                  <option value="firm">Firm −2</option>
+                  <option value="hard">Hard −3</option>
+                  <option value="reinforced">Reinforced −4</option>
+                </select>
+              </div>
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label class="lbl" for="c-def">Active defense</label>
+              <select id="c-def">
+                <option value="none">None — it lands if it hits</option>
+                <option value="melee">Melee / contested — rank subtracts</option>
+                <option value="cover">Dive for cover — absorb adds to cover</option>
+              </select>
+            </div>
+            <div id="c-def-block" class="hidden" style="margin-top:12px">
+              <div class="grid2">
+                <div class="field" style="margin-bottom:0">
+                  <label class="lbl" for="c-dval">Defender Obj. value</label>
+                  <input type="number" id="c-dval" value="4" min="0" step="1" />
+                </div>
+                <div class="field" style="margin-bottom:0">
+                  <label class="lbl" for="c-dabs">Defender absorb <span class="tag">1–6</span></label>
+                  <input type="number" id="c-dabs" value="3" min="1" max="6" step="1" />
+                </div>
+              </div>
+              <div class="note-inline" id="c-def-note">The defender throws a full Measure; a success subtracts their Yield rank from the incoming rank.</div>
+            </div>
+          </fieldset>
+        </div>
+
+        <!-- HAZARD -->
+        <div id="form-hazard" class="hidden">
+          <div class="field">
+            <label class="lbl" for="h-fam">Hazard family</label>
+            <select id="h-fam"></select>
+          </div>
+          <div class="field" id="h-eff-wrap">
+            <label class="lbl" for="h-eff">Effect <span class="tag" id="h-eff-tag"></span></label>
+            <input type="number" id="h-eff" value="5" min="1" step="1" />
+            <div class="note-inline" id="h-anchor"></div>
+          </div>
+          <fieldset>
+            <legend>Absorb — Yield only, no succeed/fail</legend>
+            <div class="grid2">
+              <div class="field" style="margin-bottom:0">
+                <label class="lbl" for="h-abs">Absorb rating <span class="tag">Tough/Ath 1–6</span></label>
+                <input type="number" id="h-abs" value="3" min="0" max="6" step="1" />
+              </div>
+              <div class="field" style="margin-bottom:0">
+                <label class="lbl" for="h-gear">Counter gear <span class="tag" id="h-gear-tag"></span></label>
+                <select id="h-gear">
+                  <option value="0">None</option>
+                  <option value="1">Rated −1</option>
+                  <option value="3">Heavy −3</option>
+                </select>
+              </div>
+            </div>
+            <div class="note-inline" id="h-counter"></div>
+          </fieldset>
+        </div>
+
+        <div class="throw-row">
+          <button class="btn-throw" id="throwBtn" type="button">Throw</button>
+          <button class="btn-ghost" id="clearBtn" type="button" title="Clear the readout">Reset</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ READOUT ============ -->
+    <section class="panel">
+      <div class="panel-head">
+        <span class="title">Readout</span>
+        <span class="hint" id="roHint">awaiting throw</span>
+      </div>
+      <div class="panel-body">
+        <div class="readout" id="readout">
+          <div class="empty-state">The bench is idle.<br>Declare a Measure and throw to read the instrument.</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ REFERENCE ============ -->
+  <div class="ref">
+    <h2>Working values at a glance</h2>
+    <div class="ref-grid">
+      <div class="ref-card">
+        <h3>Bands ← raw face</h3>
+        <table>
+          <tr><td>Negligible</td><td>1</td></tr>
+          <tr><td>Minor</td><td>2–4</td></tr>
+          <tr><td>Moderate</td><td>5–8</td></tr>
+          <tr><td>Major</td><td>9–11</td></tr>
+          <tr><td>Extreme</td><td>12</td></tr>
+        </table>
+      </div>
+      <div class="ref-card">
+        <h3>Exposure ← raw face</h3>
+        <table>
+          <tr><td class="c-bad">Compromised</td><td>1–3</td></tr>
+          <tr><td class="c-neutral">Contained</td><td>4–9</td></tr>
+          <tr><td class="c-good">Secure</td><td>10–12</td></tr>
+        </table>
+        <p style="margin-top:8px">Exposure takes nothing — no value, Edge, reroll or spend.</p>
+      </div>
+      <div class="ref-card">
+        <h3>Trauma ← Yield rank</h3>
+        <table>
+          <tr><td class="t1">1 · Graze</td><td>drains 1 Fatigue</td></tr>
+          <tr><td class="t2">2 · Wound</td><td>Wounded</td></tr>
+          <tr><td class="t3">3 · Serious</td><td>Seriously W.</td></tr>
+          <tr><td class="t4">4 · Critical</td><td>Critically W.</td></tr>
+          <tr><td class="t5">5 · Lethal</td><td>Dying</td></tr>
+        </table>
+      </div>
+      <div class="ref-card">
+        <h3>TN ladder <span style="color:var(--faint);font-weight:400">· odd, open</span></h3>
+        <p>5 · 7 · 9 · 11 · 13 · 15+</p>
+        <p>+2 clears TN 7 · +4 clears TN 9 · +6 clears TN 11 — each at 66.7%.</p>
+        <p>All circumstance adjusts the TN; odd adjustments permitted.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    A bench for feeling out The Measure — every reduction and band is shown so you can see the instrument work. Weapon PR, sequential-layer accounting, and Two-Value naming are Handler calls; where the text leaves a working value implicit, the bench uses the layer's reduction as its protection rating and says so in the breakdown.
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var d12 = function () { return 1 + Math.floor(Math.random() * 12); };
+
+  // ---- Universal table: Effect row -> [Neg, Minor, Mod, Major, Extreme]; 0 = "—" (no result)
+  var UNIVERSAL = {
+    1:[0,0,1,1,2], 2:[0,1,1,2,2], 3:[1,1,2,2,3], 4:[1,2,2,3,3], 5:[1,2,3,3,4],
+    6:[2,2,3,4,4], 7:[2,3,4,4,5], 8:[3,3,4,5,5], 9:[3,4,4,5,5], 10:[4,4,5,5,5]
+  };
+  var BANDS = ["Negligible", "Minor", "Moderate", "Major", "Extreme"];
+  var TRAUMA = [
+    null,
+    { stem: "Graze",    form: "Grazed — drains 1 Fatigue, no wound", cls: "t1" },
+    { stem: "Wound",    form: "Wounded",              cls: "t2" },
+    { stem: "Serious",  form: "Seriously Wounded",    cls: "t3" },
+    { stem: "Critical", form: "Critically Wounded",   cls: "t4" },
+    { stem: "Lethal",   form: "Dying",                cls: "t5" }
+  ];
+
+  var WEAPONS = {
+    baton:   { name: "Baton",           eff: [3, 3],  pen: 0, cond: "" },
+    knife:   { name: "Knife",           eff: [4, 5],  pen: 1, cond: "Bleeding" },
+    handgun: { name: "Handgun",         eff: [6, 6],  pen: 2, cond: "Bleeding" },
+    shotgun: { name: "Shotgun (close)", eff: [7, 7],  pen: 2, cond: "Bleeding" },
+    rifle:   { name: "Rifle",           eff: [7, 8],  pen: 4, cond: "Bleeding" },
+    sniper:  { name: "Sniper rifle",    eff: [8, 9],  pen: 5, cond: "Bleeding" },
+    fifty:   { name: ".50 AM rifle",    eff: [10, 10],pen: 8, cond: "Bleeding" }
+  };
+  var AMMO = { fmj: { eff: 0, pen: 0 }, hp: { eff: 1, pen: -1 }, ap: { eff: -1, pen: 2 } };
+  var ARMOR = { none: { r: 0, pr: 0 }, light: { r: 1, pr: 1 }, heavy: { r: 3, pr: 3 } };
+  var COVER = {
+    none:       { r: 0, pr: 0,  label: "None" },
+    soft:       { r: 1, pr: 1,  label: "Soft −1" },
+    firm:       { r: 2, pr: 2,  label: "Firm −2" },
+    hard:       { r: 3, pr: 3,  label: "Hard −3" },
+    reinforced: { r: 4, pr: 99, label: "Reinforced −4" }
+  };
+  var HAZARDS = {
+    fall:      { name: "Fall",            range: [3, 9], armor: false, counter: "Harness, absorb. Armor: no",
+                 anchor: "1 story ≈ Wound · 3 ≈ Serious · 5 ≈ Critical · 6+ ≈ Lethal. 10+ stories: no roll." },
+    vehicle:   { name: "Vehicle strike",  range: [4, 10], armor: false, counter: "Absorb. Armor: no",
+                 anchor: "20 mph ≈ Wound · 40 ≈ Serious/Critical · highway ≈ Critical/Lethal." },
+    fire:      { name: "Fire",            range: [3, 8], armor: true, counter: "Fire-rated gear",
+                 anchor: "Contact → immolation, ongoing." },
+    poison:    { name: "Poison / toxin",  range: [2, 9], armor: true, counter: "Antidote, mask, filtration",
+                 anchor: "Mild → nerve agent." },
+    explosion: { name: "Explosion",       range: [6, 10], armor: true, counter: "Cover, distance", multi: true,
+                 anchor: "Concussion → IED. Inflicts multiple absorbs — resolve one per hit." },
+    flashbang: { name: "Flashbang-class", range: [0, 0], armor: false, counter: "Ear/eye protection. Armor: no",
+                 conditions: true, anchor: "Conditions, not Trauma." }
+  };
+
+  // ---- helpers
+  function bandFromFace(face) {
+    if (face <= 1) return 0;
+    if (face <= 4) return 1;
+    if (face <= 8) return 2;
+    if (face <= 11) return 3;
+    return 4;
+  }
+  function tableLookup(effect, bandIdx) {
+    var row = UNIVERSAL[Math.max(1, Math.min(10, effect))];
+    return row[bandIdx];
+  }
+  function exposureBand(face) {
+    if (face <= 3) return { name: "Compromised", cls: "bad", face: face, gloss: "the action cost something real — it bites, and soon." };
+    if (face <= 9) return { name: "Contained", cls: "neutral", face: face, gloss: "a manageable cost." };
+    return { name: "Secure", cls: "good", face: face, gloss: "clean; no price." };
+  }
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+
+  // ---- DOM builders
+  function dieEl(label, val, cls) {
+    return '<div class="die ' + cls + '"><span class="dl">' + label + '</span>' + val + '</div>';
+  }
+  function gauge(opts) {
+    // opts: name, question, stripeClass, headerRight, bodyHTML
+    return '' +
+      '<div class="gauge flash">' +
+        '<span class="stripe bg-' + opts.stripeClass + '"></span>' +
+        '<div class="gauge-head"><span class="g-name">' + opts.name + '</span>' +
+          '<span class="g-q">' + opts.question + '</span></div>' +
+        '<div class="gauge-body">' + opts.body + '</div>' +
+      '</div>';
+  }
+  function stepsList(items) {
+    var h = '<ul class="steps">';
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      h += '<li' + (it.final ? ' class="final"' : '') + '><span class="op">' + (it.op || "") + '</span><span>' + it.text + '</span></li>';
+    }
+    return h + '</ul>';
+  }
+
+  // ---- Objective gauge
+  function objectiveGauge(o) {
+    // o: {die, value, edge, tn}
+    var total = o.die + o.value + (o.edge ? 2 : 0);
+    var hit = total >= o.tn;
+    var steps = [
+      { op: "", text: "die <b>" + o.die + "</b> + value <b>" + o.value + "</b>" + (o.edge ? " + Edge <b>2</b>" : "") + " = <b>" + total + "</b>" },
+      { op: hit ? "≥" : "<", text: "TN <b>" + o.tn + "</b> — " + (hit ? "meets or exceeds" : "falls short"), final: true }
+    ];
+    var body =
+      '<div class="dice">' + dieEl("OBJ", o.die, "o") + '</div>' +
+      '<div class="verdict"><span class="big ' + (hit ? "c-good" : "c-bad") + '">' + (hit ? "Success" : "Failure") + '</span>' +
+        '<span class="band ' + (hit ? "c-good" : "c-bad") + '">' + total + " vs " + o.tn + '</span></div>' +
+      stepsList(steps);
+    return { hit: hit, html: gauge({ name: "Objective", question: "did it work", stripeClass: hit ? "good" : "bad", body: body }) };
+  }
+
+  // ---- Yield gauge (returns rank + face + band)
+  function yieldCompute(o) {
+    // o: {die, effect, vitals}
+    var band = bandFromFace(o.die);
+    var bandUsed = band;
+    var bumped = false;
+    if (o.vitals && band < 4) { bandUsed = band + 1; bumped = true; }
+    var rank = tableLookup(o.effect, bandUsed);
+    return { die: o.die, band: band, bandUsed: bandUsed, bumped: bumped, effect: o.effect, rank: rank };
+  }
+  function yieldGaugeHTML(y, effLabel) {
+    var over = y.effect > 10 ? ' <span class="tag" style="color:var(--faint)">(Eff ' + y.effect + ' &gt; 10 → row 10, MC discretion)</span>' : "";
+    var steps = [
+      { op: "", text: "face <b>" + y.die + "</b> → band <b>" + BANDS[y.band] + "</b>" },
+    ];
+    if (y.bumped) steps.push({ op: "↑", text: "vitals +1 band → <b>" + BANDS[y.bandUsed] + "</b>" });
+    steps.push({ op: "×", text: (effLabel || "Effect") + " <b>" + y.effect + "</b> → rank <b>" + (y.rank || "—") + "</b>" + over, final: true });
+    var rankTxt = y.rank ? y.rank : "—";
+    var body =
+      '<div class="dice">' + dieEl("YLD", y.die, "y") + '</div>' +
+      '<div class="verdict"><span class="big rank-num">Rank ' + rankTxt + '</span>' +
+        '<span class="band">' + BANDS[y.bandUsed] + '</span></div>' +
+      stepsList(steps);
+    return body;
+  }
+
+  // ---- Exposure gauge
+  function exposureGauge(die) {
+    var e = exposureBand(die);
+    var body =
+      '<div class="dice">' + dieEl("EXP", die, "e") + '</div>' +
+      '<div class="verdict"><span class="big c-' + e.cls + '">' + e.name + '</span>' +
+        '<span class="band c-' + e.cls + '">face ' + die + '</span></div>' +
+      '<ul class="steps"><li><span class="op"></span><span>' + e.gloss + '</span></li></ul>';
+    return gauge({ name: "Exposure", question: "what it cost", stripeClass: e.cls, body: body });
+  }
+
+  function traumaLine(rank, cond) {
+    if (rank <= 0) return '<div class="trauma-line">No Trauma — the hit is fully absorbed; nothing reaches the body.</div>';
+    var t = TRAUMA[Math.min(5, rank)];
+    var condChip = cond ? '<span class="cond-chip">' + esc(cond) + '</span>' : "";
+    return '<div class="trauma-line"><b class="' + t.cls + '">' + t.stem + '</b> — <span class="form">' + t.form + '</span>' + condChip + '</div>';
+  }
+
+  // ================= RENDER MODES =================
+  var out = $("readout");
+  function setHint(t) { $("roHint").textContent = t; }
+
+  function renderSkill() {
+    var tn = +$("s-tn").value, val = +$("s-val").value, eo = $("s-eo").checked;
+    var rating = Math.max(1, +$("s-eff").value || 1), ee = $("s-ee").checked, twoVal = $("s-2v").checked;
+    var effect = Math.min(5, rating + (ee ? 2 : 0)); // unaided cap 5
+
+    var oDie = d12(), yDie = d12(), eDie = d12();
+    var obj = objectiveGauge({ die: oDie, value: val, edge: eo, tn: tn });
+    var y = yieldCompute({ die: yDie, effect: effect, vitals: false });
+
+    var yBody = yieldGaugeHTML(y, "Effect");
+    if (ee && rating >= 5) yBody += '<div class="note-inline" style="margin-top:2px">Edge blocked at the cap of 5 (rating already ' + rating + ').</div>';
+    if (!twoVal) yBody += '<div class="note-inline" style="margin-top:2px;color:var(--bad)">Two-Value Rule: unaided Effect must be a <b>different</b> value from the Objective.</div>';
+    var skillStripe = y.rank ? "t" + Math.min(5, y.rank) : "faint";
+    var yieldHTML = gauge({ name: "Yield", question: "what it delivered", stripeClass: skillStripe, body: yBody });
+
+    out.innerHTML = obj.html + yieldHTML + exposureGauge(eDie);
+    setHint((obj.hit ? "success" : "failure") + " · rank " + (y.rank || "—"));
+  }
+
+  function renderCombat() {
+    var armed = seg("c-armed") === "armed";
+    var tn = +$("c-tn").value, val = +$("c-val").value, eo = $("c-eo").checked;
+    var vitals = seg("c-strike") === "vitals";
+
+    // effect + pen
+    var effect, pen = 0, cond = "", weaponName = "", effLabel = "Effect";
+    if (armed) {
+      var w = WEAPONS[$("c-wpn").value];
+      var ammo = AMMO[$("c-ammo").value];
+      effect = Math.max(1, (+$("c-eff").value || w.eff[0]) + ammo.eff);
+      pen = Math.max(0, w.pen + ammo.pen);
+      cond = w.cond;
+      weaponName = w.name;
+      effLabel = "weapon Effect";
+    } else {
+      var urating = Math.max(1, +$("c-urating").value || 1);
+      effect = Math.min(5, urating + ($("c-uee").checked ? 2 : 0));
+      effLabel = "Effect";
+    }
+
+    var oDie = d12(), yDie = d12(), eDie = d12();
+    var obj = objectiveGauge({ die: oDie, value: val, edge: eo, tn: tn });
+
+    // ------- Yield / damage resolution -------
+    var y = yieldCompute({ die: yDie, effect: effect, vitals: vitals });
+    var baseRank = y.rank;
+    var yBody = yieldGaugeHTML(y, effLabel);
+
+    var reductionSteps = [];
+    var finalRank = baseRank;
+    var reached = true;
+
+    if (!obj.hit) {
+      reached = false;
+      finalRank = 0;
+      reductionSteps.push({ op: "✕", text: "Objective missed — nothing lands." });
+    } else {
+      // defense
+      var def = $("c-def").value;
+      var dval = +$("c-dval").value, dabs = Math.max(1, +$("c-dabs").value || 1);
+      var penNow = pen;
+
+      if (def === "melee") {
+        var dDie = d12();
+        var defHitTotal = dDie + dval;
+        var defWorks = defHitTotal >= tn; // defender opposes the same TN band as the exchange
+        if (defWorks) {
+          var dy = yieldCompute({ die: d12(), effect: Math.min(5, dabs), vitals: false });
+          finalRank = Math.max(0, finalRank - dy.rank);
+          reductionSteps.push({ op: "−", text: "Melee defense holds (def die " + dDie + "+" + dval + ") — Yield rank <b>" + dy.rank + "</b> subtracts" });
+        } else {
+          reductionSteps.push({ op: "✕", text: "Melee defense fails (def die " + dDie + "+" + dval + " &lt; " + tn + ") — it lands whole" });
+        }
+      }
+
+      // cover layer (outermost)
+      var cov = COVER[$("c-cover").value];
+      var coverReduction = cov.r;
+      if (def === "cover" && cov.r > 0) {
+        var cDie = d12();
+        var made = (cDie + dval) >= tn;
+        if (made) {
+          var ca = yieldCompute({ die: d12(), effect: Math.min(5, dabs), vitals: false });
+          coverReduction += ca.rank;
+          reductionSteps.push({ op: "+", text: "Dive made (die " + cDie + "+" + dval + ") — absorb rank <b>" + ca.rank + "</b> adds to cover" });
+        } else {
+          reductionSteps.push({ op: "✕", text: "Dive for cover missed (die " + cDie + "+" + dval + " &lt; " + tn + ") — no absorb bonus" });
+        }
+      }
+      if (cov.r > 0) {
+        var coverDefeated = penNow >= cov.pr;
+        if (coverDefeated && cov.pr < 99) {
+          reductionSteps.push({ op: "→", text: "Cover " + cov.label + ": PEN <b>" + penNow + "</b> ≥ PR " + cov.pr + " → defeated, reduction gone" });
+          penNow = penNow - cov.pr;
+        } else {
+          finalRank = finalRank - coverReduction;
+          reductionSteps.push({ op: "−", text: "Cover " + cov.label + " holds (PEN " + penNow + " &lt; PR " + (cov.pr < 99 ? cov.pr : "∞") + ") — rank −<b>" + coverReduction + "</b>" });
+        }
+      }
+
+      // armor layer
+      var arm = ARMOR[$("c-armor").value];
+      if (vitals && arm.r > 0) {
+        reductionSteps.push({ op: "→", text: "Declared vitals — armor bypassed" });
+      } else if (arm.r > 0) {
+        var armDefeated = penNow >= arm.pr;
+        if (armDefeated) {
+          reductionSteps.push({ op: "→", text: "Armor " + (arm.r === 1 ? "light" : "heavy") + ": PEN <b>" + penNow + "</b> ≥ PR " + arm.pr + " → defeated, reduction gone" });
+        } else {
+          finalRank = finalRank - arm.r;
+          reductionSteps.push({ op: "−", text: "Armor " + (arm.r === 1 ? "light −1" : "heavy −3") + " holds (PEN " + penNow + " &lt; PR " + arm.pr + ") — rank −<b>" + arm.r + "</b>, floor at Graze" });
+        }
+      }
+
+      // floor: armor can't drop below Graze on a connecting hit; cover/absorb can zero it out
+      if (finalRank < 1) {
+        if (arm.r > 0 && !vitals && penNow < arm.pr && coverReduction === 0) {
+          finalRank = 1; // armor floor at Graze
+        } else {
+          finalRank = Math.max(0, finalRank);
+        }
+      }
+    }
+
+    reductionSteps.push({ op: "=", text: reached ? "final rank <b>" + finalRank + "</b>" : "no Trauma", final: true });
+
+    yBody += stepsList(reductionSteps);
+    yBody += traumaLine(finalRank, finalRank >= 2 ? cond : "");
+    var stripeRank = reached && finalRank > 0 ? "t" + Math.min(5, finalRank) : "faint";
+    var yieldHTML = gauge({ name: "Yield → Trauma", question: "what it delivered", stripeClass: stripeRank, body: yBody });
+
+    out.innerHTML = obj.html + yieldHTML + exposureGauge(eDie);
+    var tname = finalRank > 0 ? TRAUMA[Math.min(5, finalRank)].stem : "no trauma";
+    setHint((obj.hit ? "hit" : "miss") + " · " + tname);
+  }
+
+  function renderHazard() {
+    var fam = HAZARDS[$("h-fam").value];
+    var eDieExp = null;
+    if (fam.conditions) {
+      out.innerHTML = gauge({
+        name: "Hazard", question: "what it cost", stripeClass: "neutral",
+        body: '<div class="verdict"><span class="big c-neutral">Conditions</span></div>' +
+              '<ul class="steps"><li><span class="op"></span><span>' + fam.name + ' inflicts <b>Conditions, not Trauma</b>. Counter: ' + fam.counter + '.</span></li></ul>' +
+              '<div class="note-inline">Resolve on the Condition track — outside the Measure\'s Trauma count.</div>'
+      });
+      setHint("conditions");
+      return;
+    }
+
+    var effect = Math.max(1, +$("h-eff").value || fam.range[0]);
+    var absRating = Math.max(0, +$("h-abs").value || 0);
+    var gear = +$("h-gear").value || 0;
+
+    var yDie = d12();
+    var y = yieldCompute({ die: yDie, effect: effect, vitals: false });
+    var yBody = yieldGaugeHTML(y, "hazard Effect");
+
+    var steps = [];
+    var finalRank = y.rank;
+
+    if (absRating > 0) {
+      var ay = yieldCompute({ die: d12(), effect: Math.min(6, absRating), vitals: false });
+      finalRank = Math.max(0, finalRank - ay.rank);
+      steps.push({ op: "−", text: "Absorb (Yield-only) rank <b>" + ay.rank + "</b> subtracts" });
+    } else {
+      steps.push({ op: "", text: "No absorb rolled" });
+    }
+    if (gear > 0 && fam.armor) {
+      finalRank = Math.max(0, finalRank - gear);
+      steps.push({ op: "−", text: "Counter gear −<b>" + gear + "</b>" });
+    } else if (gear > 0 && !fam.armor) {
+      steps.push({ op: "✕", text: "This hazard ignores gear/armor — no reduction" });
+    }
+    if (fam.multi) steps.push({ op: "!", text: "Multiple absorbs — resolve this once per hit" });
+    steps.push({ op: "=", text: "final rank <b>" + finalRank + "</b>", final: true });
+
+    yBody += stepsList(steps);
+    yBody += traumaLine(finalRank, "");
+    var stripeRank = finalRank > 0 ? "t" + Math.min(5, finalRank) : "faint";
+    out.innerHTML = gauge({ name: "Yield → Trauma", question: "what it cost", stripeClass: stripeRank, body: yBody });
+    setHint(finalRank > 0 ? TRAUMA[Math.min(5, finalRank)].stem : "absorbed");
+  }
+
+  // ---- segmented control state
+  function seg(groupId) {
+    var g = $(groupId);
+    var b = g.querySelector('[aria-pressed="true"]');
+    return b ? b.getAttribute("data-v") : null;
+  }
+  function wireSeg(groupId, onChange) {
+    var g = $(groupId);
+    g.addEventListener("click", function (e) {
+      var btn = e.target.closest("button");
+      if (!btn) return;
+      g.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+      btn.setAttribute("aria-pressed", "true");
+      if (onChange) onChange(btn.getAttribute("data-v"));
+    });
+  }
+
+  // ================= WIRING =================
+  var mode = "skill";
+  function switchMode(m) {
+    mode = m;
+    ["skill", "combat", "hazard"].forEach(function (x) {
+      $("form-" + x).classList.toggle("hidden", x !== m);
+      var tab = $("tab-" + x);
+      tab.setAttribute("aria-selected", x === m ? "true" : "false");
+    });
+    var hints = { skill: "Objective · Yield · Exposure", combat: "attack → defense → Trauma", hazard: "Yield-only absorb → Trauma" };
+    $("declHint").textContent = hints[m];
+    out.innerHTML = '<div class="empty-state">' +
+      (m === "skill" ? "Declare a Measure and throw to read the instrument." :
+       m === "combat" ? "Set the attack and the target's protection, then throw." :
+       "Pick a hazard and an absorb, then throw.") + '</div>';
+    setHint("awaiting throw");
+  }
+  document.querySelectorAll('.modes button').forEach(function (b) {
+    b.addEventListener("click", function () { switchMode(b.getAttribute("data-mode")); });
+  });
+
+  function doThrow() {
+    if (mode === "skill") renderSkill();
+    else if (mode === "combat") renderCombat();
+    else renderHazard();
+  }
+  $("throwBtn").addEventListener("click", doThrow);
+  $("clearBtn").addEventListener("click", function () { switchMode(mode); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey && document.activeElement.tagName !== "BUTTON") { e.preventDefault(); doThrow(); }
+  });
+
+  // populate weapon select
+  (function () {
+    var sel = $("c-wpn");
+    Object.keys(WEAPONS).forEach(function (k) {
+      var w = WEAPONS[k];
+      var eff = w.eff[0] === w.eff[1] ? w.eff[0] : w.eff[0] + "–" + w.eff[1];
+      var opt = document.createElement("option");
+      opt.value = k;
+      opt.textContent = w.name + " · Eff " + eff + (w.pen ? " · PEN " + w.pen : "");
+      sel.appendChild(opt);
+    });
+    sel.value = "handgun";
+  })();
+  // populate hazard select
+  (function () {
+    var sel = $("h-fam");
+    Object.keys(HAZARDS).forEach(function (k) {
+      var h = HAZARDS[k];
+      var opt = document.createElement("option");
+      opt.value = k;
+      opt.textContent = h.name;
+      sel.appendChild(opt);
+    });
+  })();
+
+  function syncWeapon() {
+    var w = WEAPONS[$("c-wpn").value];
+    var ammo = AMMO[$("c-ammo").value];
+    var lo = w.eff[0], hi = w.eff[1];
+    var effInput = $("c-eff");
+    var tag = $("c-eff-tag");
+    if (lo === hi) {
+      effInput.value = lo; tag.textContent = "printed " + lo;
+    } else {
+      if (+effInput.value < lo || +effInput.value > hi) effInput.value = lo;
+      tag.textContent = "range " + lo + "–" + hi;
+    }
+    effInput.min = lo; effInput.max = hi;
+    var basePen = Math.max(0, w.pen + ammo.pen);
+    var baseEff = Math.max(1, (+effInput.value) + ammo.eff);
+    var ammoTxt = $("c-ammo").value === "fmj" ? "" : " · with ammo → Eff " + baseEff + ", PEN " + basePen;
+    $("c-wpnline").innerHTML = "Armed: the weapon's Effect is always the Effect." + ammoTxt +
+      (w.cond ? ' · on a wound: <b style="color:var(--bad)">' + w.cond + "</b>" : "");
+  }
+  $("c-wpn").addEventListener("change", syncWeapon);
+  $("c-ammo").addEventListener("change", syncWeapon);
+  $("c-eff").addEventListener("input", syncWeapon);
+
+  wireSeg("c-armed", function (v) {
+    $("c-armed-block").classList.toggle("hidden", v !== "armed");
+    $("c-unarmed-block").classList.toggle("hidden", v !== "unarmed");
+  });
+  wireSeg("c-strike");
+
+  $("c-def").addEventListener("change", function () {
+    var v = this.value;
+    $("c-def-block").classList.toggle("hidden", v === "none");
+    var note = $("c-def-note");
+    if (v === "melee") note.innerHTML = "The defender throws a full Measure; a success subtracts their Yield rank from the incoming rank.";
+    else if (v === "cover") note.innerHTML = "Dive for cover: a made Objective adds the defender's absorb rank to the cover's reduction.";
+  });
+
+  function syncHazard() {
+    var h = HAZARDS[$("h-fam").value];
+    var wrap = $("h-eff-wrap");
+    if (h.conditions) { wrap.classList.add("hidden"); }
+    else {
+      wrap.classList.remove("hidden");
+      $("h-eff-tag").textContent = "range " + h.range[0] + "–" + h.range[1];
+      var inp = $("h-eff");
+      inp.min = h.range[0]; inp.max = h.range[1];
+      if (+inp.value < h.range[0] || +inp.value > h.range[1]) inp.value = h.range[0];
+      $("h-anchor").textContent = h.anchor;
+    }
+    $("h-counter").innerHTML = "Counter: <b>" + h.counter + "</b>." + (h.armor ? "" : " Gear/armor does not reduce this hazard.");
+    $("h-gear-tag").textContent = h.armor ? "if rated" : "no effect";
+  }
+  $("h-fam").addEventListener("change", syncHazard);
+
+  // theme toggle
+  var themeBtn = $("themeBtn");
+  function applyTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    $("themeIcon").textContent = t === "dark" ? "◑" : "◐";
+    $("themeLabel").textContent = t === "dark" ? "Dark" : "Light";
+  }
+  var startDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(startDark ? "dark" : "light");
+  themeBtn.addEventListener("click", function () {
+    var cur = document.documentElement.getAttribute("data-theme");
+    applyTheme(cur === "dark" ? "light" : "dark");
+  });
+
+  // init
+  syncWeapon();
+  syncHazard();
+  switchMode("skill");
+})();
+</script>
