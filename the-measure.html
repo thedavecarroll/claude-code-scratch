@@ -152,6 +152,23 @@
   .btn-throw:active { transform: translateY(1px); }
   .btn-ghost { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 16px; cursor: pointer; }
   .btn-ghost:hover { color: var(--ink); border-color: var(--accent); }
+  .sim-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .btn-sim { font-family: var(--mono); font-size: 12.5px; letter-spacing: .16em; text-transform: uppercase; font-weight: 600; color: var(--ink); background: var(--surface-2); border: 1px solid var(--accent); border-radius: 3px; padding: 11px 18px; cursor: pointer; white-space: nowrap; }
+  .btn-sim:hover { background: var(--accent); color: #12100a; }
+  .btn-sim:active { transform: translateY(1px); }
+  #simN { width: auto; padding: 10px 8px; font-size: 13px; }
+  .sim-note { font-size: 11px; color: var(--faint); font-family: var(--serif); font-style: italic; flex: 1; min-width: 120px; }
+
+  /* simulator readout */
+  .sim-summary { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); padding: 2px 2px 4px; }
+  .sim-summary b { color: var(--accent); }
+  .bars { display: flex; flex-direction: column; gap: 7px; }
+  .bar-row { display: grid; grid-template-columns: 112px 1fr 52px; align-items: center; gap: 10px; font-size: 12.5px; }
+  .bar-label { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { height: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  .bar-fill { display: block; height: 100%; min-width: 1px; }
+  .bar-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  @media (prefers-reduced-motion: no-preference) { .bar-fill { transition: width .35s cubic-bezier(.2,.7,.2,1); } }
 
   /* ---- Readout ---- */
   .readout { display: flex; flex-direction: column; gap: 14px; }
@@ -415,6 +432,15 @@
           <button class="btn-throw" id="throwBtn" type="button">Throw</button>
           <button class="btn-ghost" id="clearBtn" type="button" title="Clear the readout">Reset</button>
         </div>
+        <div class="sim-row">
+          <button class="btn-sim" id="simBtn" type="button">Simulate</button>
+          <select id="simN" aria-label="Number of simulated throws">
+            <option value="1000">1,000</option>
+            <option value="10000" selected>10,000</option>
+            <option value="100000">100,000</option>
+          </select>
+          <span class="sim-note">throws of this setup — success %, rank &amp; Exposure spread</span>
+        </div>
       </div>
     </section>
 
@@ -575,21 +601,159 @@
     return h + '</ul>';
   }
 
-  // ---- Objective gauge
-  function objectiveGauge(o) {
-    // o: {die, value, edge, tn}
-    var total = o.die + o.value + (o.edge ? 2 : 0);
-    var hit = total >= o.tn;
+  // ---- Objective: pure resolve + gauge HTML (shared by throw + simulator)
+  function resolveObjective(die, value, edge, tn) {
+    var total = die + value + (edge ? 2 : 0);
+    return { die: die, value: value, edge: edge, tn: tn, total: total, hit: total >= tn };
+  }
+  function objectiveGaugeHTML(o) {
+    var hit = o.hit;
     var steps = [
-      { op: "", text: "die <b>" + o.die + "</b> + value <b>" + o.value + "</b>" + (o.edge ? " + Edge <b>2</b>" : "") + " = <b>" + total + "</b>" },
+      { op: "", text: "die <b>" + o.die + "</b> + value <b>" + o.value + "</b>" + (o.edge ? " + Edge <b>2</b>" : "") + " = <b>" + o.total + "</b>" },
       { op: hit ? "≥" : "<", text: "TN <b>" + o.tn + "</b> — " + (hit ? "meets or exceeds" : "falls short"), final: true }
     ];
     var body =
       '<div class="dice">' + dieEl("OBJ", o.die, "o") + '</div>' +
       '<div class="verdict"><span class="big ' + (hit ? "c-good" : "c-bad") + '">' + (hit ? "Success" : "Failure") + '</span>' +
-        '<span class="band ' + (hit ? "c-good" : "c-bad") + '">' + total + " vs " + o.tn + '</span></div>' +
+        '<span class="band ' + (hit ? "c-good" : "c-bad") + '">' + o.total + " vs " + o.tn + '</span></div>' +
       stepsList(steps);
-    return { hit: hit, html: gauge({ name: "Objective", question: "did it work", stripeClass: hit ? "good" : "bad", body: body }) };
+    return gauge({ name: "Objective", question: "did it work", stripeClass: hit ? "good" : "bad", body: body });
+  }
+  // exact success probability over a fair d12 — for validating the calibration ladder
+  function objectiveExact(value, edge, tn) {
+    var v = value + (edge ? 2 : 0), c = 0;
+    for (var d = 1; d <= 12; d++) if (d + v >= tn) c++;
+    return c / 12;
+  }
+
+  // ================= PARAM READERS + PURE RESOLVERS =================
+  // Read DOM once → params; resolve rolls dice from params. One throw and N sims
+  // run the identical resolver, so the readout and the odds can never disagree.
+  function readSkill() {
+    var rating = Math.max(1, +$("s-eff").value || 1), ee = $("s-ee").checked;
+    return {
+      tn: +$("s-tn").value, val: +$("s-val").value, eo: $("s-eo").checked,
+      rating: rating, ee: ee, twoVal: $("s-2v").checked,
+      effect: Math.min(5, rating + (ee ? 2 : 0)) // unaided cap 5
+    };
+  }
+  function resolveSkill(p) {
+    return {
+      obj: resolveObjective(d12(), p.val, p.eo, p.tn),
+      y: yieldCompute({ die: d12(), effect: p.effect, vitals: false }),
+      eDie: d12()
+    };
+  }
+
+  function readCombat() {
+    var armed = seg("c-armed") === "armed";
+    var p = {
+      armed: armed, tn: +$("c-tn").value, val: +$("c-val").value, eo: $("c-eo").checked,
+      vitals: seg("c-strike") === "vitals",
+      armorKey: $("c-armor").value, coverKey: $("c-cover").value,
+      def: $("c-def").value, dval: +$("c-dval").value, dabs: Math.max(1, +$("c-dabs").value || 1)
+    };
+    if (armed) {
+      var w = WEAPONS[$("c-wpn").value], ammo = AMMO[$("c-ammo").value];
+      p.effect = Math.max(1, (+$("c-eff").value || w.eff[0]) + ammo.eff);
+      p.pen = Math.max(0, w.pen + ammo.pen);
+      p.cond = w.cond; p.effLabel = "weapon Effect";
+    } else {
+      var urating = Math.max(1, +$("c-urating").value || 1);
+      p.effect = Math.min(5, urating + ($("c-uee").checked ? 2 : 0));
+      p.pen = 0; p.cond = ""; p.effLabel = "Effect";
+    }
+    return p;
+  }
+  function resolveCombat(p) {
+    var obj = resolveObjective(d12(), p.val, p.eo, p.tn);
+    var y = yieldCompute({ die: d12(), effect: p.effect, vitals: p.vitals });
+    var reductionSteps = [], finalRank = y.rank, reached = true;
+
+    if (!obj.hit) {
+      reached = false; finalRank = 0;
+      reductionSteps.push({ op: "✕", text: "Objective missed — nothing lands." });
+    } else {
+      var penNow = p.pen;
+      if (p.def === "melee") {
+        var dDie = d12(), defWorks = (dDie + p.dval) >= p.tn;
+        if (defWorks) {
+          var dy = yieldCompute({ die: d12(), effect: Math.min(5, p.dabs), vitals: false });
+          finalRank = Math.max(0, finalRank - dy.rank);
+          reductionSteps.push({ op: "−", text: "Melee defense holds (def die " + dDie + "+" + p.dval + ") — Yield rank <b>" + dy.rank + "</b> subtracts" });
+        } else {
+          reductionSteps.push({ op: "✕", text: "Melee defense fails (def die " + dDie + "+" + p.dval + " &lt; " + p.tn + ") — it lands whole" });
+        }
+      }
+      var cov = COVER[p.coverKey], coverReduction = cov.r;
+      if (p.def === "cover" && cov.r > 0) {
+        var cDie = d12(), made = (cDie + p.dval) >= p.tn;
+        if (made) {
+          var ca = yieldCompute({ die: d12(), effect: Math.min(5, p.dabs), vitals: false });
+          coverReduction += ca.rank;
+          reductionSteps.push({ op: "+", text: "Dive made (die " + cDie + "+" + p.dval + ") — absorb rank <b>" + ca.rank + "</b> adds to cover" });
+        } else {
+          reductionSteps.push({ op: "✕", text: "Dive for cover missed (die " + cDie + "+" + p.dval + " &lt; " + p.tn + ") — no absorb bonus" });
+        }
+      }
+      if (cov.r > 0) {
+        if (penNow >= cov.pr && cov.pr < 99) {
+          reductionSteps.push({ op: "→", text: "Cover " + cov.label + ": PEN <b>" + penNow + "</b> ≥ PR " + cov.pr + " → defeated, reduction gone" });
+          penNow = penNow - cov.pr;
+        } else {
+          finalRank = finalRank - coverReduction;
+          reductionSteps.push({ op: "−", text: "Cover " + cov.label + " holds (PEN " + penNow + " &lt; PR " + (cov.pr < 99 ? cov.pr : "∞") + ") — rank −<b>" + coverReduction + "</b>" });
+        }
+      }
+      var arm = ARMOR[p.armorKey];
+      if (p.vitals && arm.r > 0) {
+        reductionSteps.push({ op: "→", text: "Declared vitals — armor bypassed" });
+      } else if (arm.r > 0) {
+        if (penNow >= arm.pr) {
+          reductionSteps.push({ op: "→", text: "Armor " + (arm.r === 1 ? "light" : "heavy") + ": PEN <b>" + penNow + "</b> ≥ PR " + arm.pr + " → defeated, reduction gone" });
+        } else {
+          finalRank = finalRank - arm.r;
+          reductionSteps.push({ op: "−", text: "Armor " + (arm.r === 1 ? "light −1" : "heavy −3") + " holds (PEN " + penNow + " &lt; PR " + arm.pr + ") — rank −<b>" + arm.r + "</b>, floor at Graze" });
+        }
+      }
+      if (finalRank < 1) {
+        if (arm.r > 0 && !p.vitals && penNow < arm.pr && coverReduction === 0) finalRank = 1; // armor floor at Graze
+        else finalRank = Math.max(0, finalRank);
+      }
+    }
+    reductionSteps.push({ op: "=", text: reached ? "final rank <b>" + finalRank + "</b>" : "no Trauma", final: true });
+    return { obj: obj, y: y, reductionSteps: reductionSteps, finalRank: finalRank, reached: reached, cond: p.cond, effLabel: p.effLabel, eDie: d12() };
+  }
+
+  function readHazard() {
+    var fam = HAZARDS[$("h-fam").value];
+    return {
+      fam: fam,
+      effect: Math.max(1, +$("h-eff").value || fam.range[0]),
+      absRating: Math.max(0, +$("h-abs").value || 0),
+      gear: +$("h-gear").value || 0
+    };
+  }
+  function resolveHazard(p) {
+    if (p.fam.conditions) return { conditions: true, fam: p.fam };
+    var y = yieldCompute({ die: d12(), effect: p.effect, vitals: false });
+    var steps = [], finalRank = y.rank;
+    if (p.absRating > 0) {
+      var ay = yieldCompute({ die: d12(), effect: Math.min(6, p.absRating), vitals: false });
+      finalRank = Math.max(0, finalRank - ay.rank);
+      steps.push({ op: "−", text: "Absorb (Yield-only) rank <b>" + ay.rank + "</b> subtracts" });
+    } else {
+      steps.push({ op: "", text: "No absorb rolled" });
+    }
+    if (p.gear > 0 && p.fam.armor) {
+      finalRank = Math.max(0, finalRank - p.gear);
+      steps.push({ op: "−", text: "Counter gear −<b>" + p.gear + "</b>" });
+    } else if (p.gear > 0 && !p.fam.armor) {
+      steps.push({ op: "✕", text: "This hazard ignores gear/armor — no reduction" });
+    }
+    if (p.fam.multi) steps.push({ op: "!", text: "Multiple absorbs — resolve this once per hit" });
+    steps.push({ op: "=", text: "final rank <b>" + finalRank + "</b>", final: true });
+    return { conditions: false, y: y, steps: steps, finalRank: finalRank };
   }
 
   // ---- Yield gauge (returns rank + face + band)
@@ -641,187 +805,128 @@
   function setHint(t) { $("roHint").textContent = t; }
 
   function renderSkill() {
-    var tn = +$("s-tn").value, val = +$("s-val").value, eo = $("s-eo").checked;
-    var rating = Math.max(1, +$("s-eff").value || 1), ee = $("s-ee").checked, twoVal = $("s-2v").checked;
-    var effect = Math.min(5, rating + (ee ? 2 : 0)); // unaided cap 5
-
-    var oDie = d12(), yDie = d12(), eDie = d12();
-    var obj = objectiveGauge({ die: oDie, value: val, edge: eo, tn: tn });
-    var y = yieldCompute({ die: yDie, effect: effect, vitals: false });
-
-    var yBody = yieldGaugeHTML(y, "Effect");
-    if (ee && rating >= 5) yBody += '<div class="note-inline" style="margin-top:2px">Edge blocked at the cap of 5 (rating already ' + rating + ').</div>';
-    if (!twoVal) yBody += '<div class="note-inline" style="margin-top:2px;color:var(--bad)">Two-Value Rule: unaided Effect must be a <b>different</b> value from the Objective.</div>';
-    var skillStripe = y.rank ? "t" + Math.min(5, y.rank) : "faint";
+    var p = readSkill();
+    var r = resolveSkill(p);
+    var yBody = yieldGaugeHTML(r.y, "Effect");
+    if (p.ee && p.rating >= 5) yBody += '<div class="note-inline" style="margin-top:2px">Edge blocked at the cap of 5 (rating already ' + p.rating + ').</div>';
+    if (!p.twoVal) yBody += '<div class="note-inline" style="margin-top:2px;color:var(--bad)">Two-Value Rule: unaided Effect must be a <b>different</b> value from the Objective.</div>';
+    var skillStripe = r.y.rank ? "t" + Math.min(5, r.y.rank) : "faint";
     var yieldHTML = gauge({ name: "Yield", question: "what it delivered", stripeClass: skillStripe, body: yBody });
 
-    out.innerHTML = obj.html + yieldHTML + exposureGauge(eDie);
-    setHint((obj.hit ? "success" : "failure") + " · rank " + (y.rank || "—"));
+    out.innerHTML = objectiveGaugeHTML(r.obj) + yieldHTML + exposureGauge(r.eDie);
+    setHint((r.obj.hit ? "success" : "failure") + " · rank " + (r.y.rank || "—"));
   }
 
   function renderCombat() {
-    var armed = seg("c-armed") === "armed";
-    var tn = +$("c-tn").value, val = +$("c-val").value, eo = $("c-eo").checked;
-    var vitals = seg("c-strike") === "vitals";
-
-    // effect + pen
-    var effect, pen = 0, cond = "", weaponName = "", effLabel = "Effect";
-    if (armed) {
-      var w = WEAPONS[$("c-wpn").value];
-      var ammo = AMMO[$("c-ammo").value];
-      effect = Math.max(1, (+$("c-eff").value || w.eff[0]) + ammo.eff);
-      pen = Math.max(0, w.pen + ammo.pen);
-      cond = w.cond;
-      weaponName = w.name;
-      effLabel = "weapon Effect";
-    } else {
-      var urating = Math.max(1, +$("c-urating").value || 1);
-      effect = Math.min(5, urating + ($("c-uee").checked ? 2 : 0));
-      effLabel = "Effect";
-    }
-
-    var oDie = d12(), yDie = d12(), eDie = d12();
-    var obj = objectiveGauge({ die: oDie, value: val, edge: eo, tn: tn });
-
-    // ------- Yield / damage resolution -------
-    var y = yieldCompute({ die: yDie, effect: effect, vitals: vitals });
-    var baseRank = y.rank;
-    var yBody = yieldGaugeHTML(y, effLabel);
-
-    var reductionSteps = [];
-    var finalRank = baseRank;
-    var reached = true;
-
-    if (!obj.hit) {
-      reached = false;
-      finalRank = 0;
-      reductionSteps.push({ op: "✕", text: "Objective missed — nothing lands." });
-    } else {
-      // defense
-      var def = $("c-def").value;
-      var dval = +$("c-dval").value, dabs = Math.max(1, +$("c-dabs").value || 1);
-      var penNow = pen;
-
-      if (def === "melee") {
-        var dDie = d12();
-        var defHitTotal = dDie + dval;
-        var defWorks = defHitTotal >= tn; // defender opposes the same TN band as the exchange
-        if (defWorks) {
-          var dy = yieldCompute({ die: d12(), effect: Math.min(5, dabs), vitals: false });
-          finalRank = Math.max(0, finalRank - dy.rank);
-          reductionSteps.push({ op: "−", text: "Melee defense holds (def die " + dDie + "+" + dval + ") — Yield rank <b>" + dy.rank + "</b> subtracts" });
-        } else {
-          reductionSteps.push({ op: "✕", text: "Melee defense fails (def die " + dDie + "+" + dval + " &lt; " + tn + ") — it lands whole" });
-        }
-      }
-
-      // cover layer (outermost)
-      var cov = COVER[$("c-cover").value];
-      var coverReduction = cov.r;
-      if (def === "cover" && cov.r > 0) {
-        var cDie = d12();
-        var made = (cDie + dval) >= tn;
-        if (made) {
-          var ca = yieldCompute({ die: d12(), effect: Math.min(5, dabs), vitals: false });
-          coverReduction += ca.rank;
-          reductionSteps.push({ op: "+", text: "Dive made (die " + cDie + "+" + dval + ") — absorb rank <b>" + ca.rank + "</b> adds to cover" });
-        } else {
-          reductionSteps.push({ op: "✕", text: "Dive for cover missed (die " + cDie + "+" + dval + " &lt; " + tn + ") — no absorb bonus" });
-        }
-      }
-      if (cov.r > 0) {
-        var coverDefeated = penNow >= cov.pr;
-        if (coverDefeated && cov.pr < 99) {
-          reductionSteps.push({ op: "→", text: "Cover " + cov.label + ": PEN <b>" + penNow + "</b> ≥ PR " + cov.pr + " → defeated, reduction gone" });
-          penNow = penNow - cov.pr;
-        } else {
-          finalRank = finalRank - coverReduction;
-          reductionSteps.push({ op: "−", text: "Cover " + cov.label + " holds (PEN " + penNow + " &lt; PR " + (cov.pr < 99 ? cov.pr : "∞") + ") — rank −<b>" + coverReduction + "</b>" });
-        }
-      }
-
-      // armor layer
-      var arm = ARMOR[$("c-armor").value];
-      if (vitals && arm.r > 0) {
-        reductionSteps.push({ op: "→", text: "Declared vitals — armor bypassed" });
-      } else if (arm.r > 0) {
-        var armDefeated = penNow >= arm.pr;
-        if (armDefeated) {
-          reductionSteps.push({ op: "→", text: "Armor " + (arm.r === 1 ? "light" : "heavy") + ": PEN <b>" + penNow + "</b> ≥ PR " + arm.pr + " → defeated, reduction gone" });
-        } else {
-          finalRank = finalRank - arm.r;
-          reductionSteps.push({ op: "−", text: "Armor " + (arm.r === 1 ? "light −1" : "heavy −3") + " holds (PEN " + penNow + " &lt; PR " + arm.pr + ") — rank −<b>" + arm.r + "</b>, floor at Graze" });
-        }
-      }
-
-      // floor: armor can't drop below Graze on a connecting hit; cover/absorb can zero it out
-      if (finalRank < 1) {
-        if (arm.r > 0 && !vitals && penNow < arm.pr && coverReduction === 0) {
-          finalRank = 1; // armor floor at Graze
-        } else {
-          finalRank = Math.max(0, finalRank);
-        }
-      }
-    }
-
-    reductionSteps.push({ op: "=", text: reached ? "final rank <b>" + finalRank + "</b>" : "no Trauma", final: true });
-
-    yBody += stepsList(reductionSteps);
-    yBody += traumaLine(finalRank, finalRank >= 2 ? cond : "");
-    var stripeRank = reached && finalRank > 0 ? "t" + Math.min(5, finalRank) : "faint";
+    var p = readCombat();
+    var r = resolveCombat(p);
+    var yBody = yieldGaugeHTML(r.y, r.effLabel);
+    yBody += stepsList(r.reductionSteps);
+    yBody += traumaLine(r.finalRank, r.finalRank >= 2 ? r.cond : "");
+    var stripeRank = r.reached && r.finalRank > 0 ? "t" + Math.min(5, r.finalRank) : "faint";
     var yieldHTML = gauge({ name: "Yield → Trauma", question: "what it delivered", stripeClass: stripeRank, body: yBody });
 
-    out.innerHTML = obj.html + yieldHTML + exposureGauge(eDie);
-    var tname = finalRank > 0 ? TRAUMA[Math.min(5, finalRank)].stem : "no trauma";
-    setHint((obj.hit ? "hit" : "miss") + " · " + tname);
+    out.innerHTML = objectiveGaugeHTML(r.obj) + yieldHTML + exposureGauge(r.eDie);
+    var tname = r.finalRank > 0 ? TRAUMA[Math.min(5, r.finalRank)].stem : "no trauma";
+    setHint((r.obj.hit ? "hit" : "miss") + " · " + tname);
   }
 
   function renderHazard() {
-    var fam = HAZARDS[$("h-fam").value];
-    var eDieExp = null;
-    if (fam.conditions) {
+    var p = readHazard();
+    var r = resolveHazard(p);
+    if (r.conditions) {
       out.innerHTML = gauge({
         name: "Hazard", question: "what it cost", stripeClass: "neutral",
         body: '<div class="verdict"><span class="big c-neutral">Conditions</span></div>' +
-              '<ul class="steps"><li><span class="op"></span><span>' + fam.name + ' inflicts <b>Conditions, not Trauma</b>. Counter: ' + fam.counter + '.</span></li></ul>' +
+              '<ul class="steps"><li><span class="op"></span><span>' + p.fam.name + ' inflicts <b>Conditions, not Trauma</b>. Counter: ' + p.fam.counter + '.</span></li></ul>' +
               '<div class="note-inline">Resolve on the Condition track — outside the Measure\'s Trauma count.</div>'
       });
       setHint("conditions");
       return;
     }
-
-    var effect = Math.max(1, +$("h-eff").value || fam.range[0]);
-    var absRating = Math.max(0, +$("h-abs").value || 0);
-    var gear = +$("h-gear").value || 0;
-
-    var yDie = d12();
-    var y = yieldCompute({ die: yDie, effect: effect, vitals: false });
-    var yBody = yieldGaugeHTML(y, "hazard Effect");
-
-    var steps = [];
-    var finalRank = y.rank;
-
-    if (absRating > 0) {
-      var ay = yieldCompute({ die: d12(), effect: Math.min(6, absRating), vitals: false });
-      finalRank = Math.max(0, finalRank - ay.rank);
-      steps.push({ op: "−", text: "Absorb (Yield-only) rank <b>" + ay.rank + "</b> subtracts" });
-    } else {
-      steps.push({ op: "", text: "No absorb rolled" });
-    }
-    if (gear > 0 && fam.armor) {
-      finalRank = Math.max(0, finalRank - gear);
-      steps.push({ op: "−", text: "Counter gear −<b>" + gear + "</b>" });
-    } else if (gear > 0 && !fam.armor) {
-      steps.push({ op: "✕", text: "This hazard ignores gear/armor — no reduction" });
-    }
-    if (fam.multi) steps.push({ op: "!", text: "Multiple absorbs — resolve this once per hit" });
-    steps.push({ op: "=", text: "final rank <b>" + finalRank + "</b>", final: true });
-
-    yBody += stepsList(steps);
-    yBody += traumaLine(finalRank, "");
-    var stripeRank = finalRank > 0 ? "t" + Math.min(5, finalRank) : "faint";
+    var yBody = yieldGaugeHTML(r.y, "hazard Effect") + stepsList(r.steps) + traumaLine(r.finalRank, "");
+    var stripeRank = r.finalRank > 0 ? "t" + Math.min(5, r.finalRank) : "faint";
     out.innerHTML = gauge({ name: "Yield → Trauma", question: "what it cost", stripeClass: stripeRank, body: yBody });
-    setHint(finalRank > 0 ? TRAUMA[Math.min(5, finalRank)].stem : "absorbed");
+    setHint(r.finalRank > 0 ? TRAUMA[Math.min(5, r.finalRank)].stem : "absorbed");
+  }
+
+  // ================= SIMULATOR (Monte Carlo) =================
+  function pct(count, total) { return total ? (100 * count / total) : 0; }
+  function fmtN(n) { return n.toLocaleString("en-US"); }
+  function barRow(label, count, total, barKey) {
+    var p = pct(count, total);
+    return '<div class="bar-row">' +
+      '<span class="bar-label">' + label + '</span>' +
+      '<span class="bar-track"><span class="bar-fill bg-' + barKey + '" style="width:' + p.toFixed(1) + '%"></span></span>' +
+      '<span class="bar-val">' + p.toFixed(1) + '%</span></div>';
+  }
+  function statCard(title, meta, rowsHTML) {
+    return '<div class="gauge flash"><div class="gauge-head"><span class="g-name">' + title + '</span>' +
+      '<span class="g-q">' + meta + '</span></div><div class="gauge-body"><div class="bars">' + rowsHTML + '</div></div></div>';
+  }
+  function distBlock(title, rankArr, n, useTrauma) {
+    var labels = useTrauma
+      ? ["No Trauma", "Graze", "Wounded", "Serious", "Critical", "Lethal"]
+      : ["— (no result)", "Rank 1", "Rank 2", "Rank 3", "Rank 4", "Rank 5"];
+    var keys = ["faint", "t1", "t2", "t3", "t4", "t5"];
+    var sum = 0, cnt = 0, rows = "";
+    for (var k = 0; k <= 5; k++) { sum += k * rankArr[k]; cnt += rankArr[k]; }
+    var mean = cnt ? sum / cnt : 0;
+    for (var j = 0; j <= 5; j++) rows += barRow(labels[j], rankArr[j], n, keys[j]);
+    return statCard(title, "mean rank " + mean.toFixed(2), rows);
+  }
+  function objBlock(hits, n, exact) {
+    var rows = barRow("Success", hits, n, "good") + barRow("Failure", n - hits, n, "bad");
+    return statCard("Objective", "sim " + pct(hits, n).toFixed(1) + "% · exact " + (exact * 100).toFixed(1) + "%", rows);
+  }
+  function expoBlock(expo, n) {
+    var rows = barRow("Compromised", expo.Compromised, n, "bad") +
+               barRow("Contained", expo.Contained, n, "neutral") +
+               barRow("Secure", expo.Secure, n, "good");
+    return statCard("Exposure", "n = " + fmtN(n), rows);
+  }
+  function newExpo() { return { Compromised: 0, Contained: 0, Secure: 0 }; }
+
+  function renderSim() {
+    var n = +$("simN").value;
+    var summary = '<div class="sim-summary">Monte Carlo · <b>' + fmtN(n) + '</b> throws of this exact setup</div>';
+    var html;
+    if (mode === "skill") {
+      var p = readSkill(), hits = 0, rank = [0, 0, 0, 0, 0, 0], expo = newExpo();
+      for (var i = 0; i < n; i++) {
+        var r = resolveSkill(p);
+        if (r.obj.hit) hits++;
+        rank[r.y.rank || 0]++;
+        expo[exposureBand(r.eDie).name]++;
+      }
+      html = objBlock(hits, n, objectiveExact(p.val, p.eo, p.tn)) +
+             distBlock("Yield rank", rank, n, false) + expoBlock(expo, n);
+      setHint(fmtN(n) + " throws · " + pct(hits, n).toFixed(1) + "% success");
+    } else if (mode === "combat") {
+      var cp = readCombat(), chits = 0, crank = [0, 0, 0, 0, 0, 0], cexpo = newExpo();
+      for (var j = 0; j < n; j++) {
+        var cr = resolveCombat(cp);
+        if (cr.obj.hit) chits++;
+        crank[Math.min(5, cr.finalRank)]++;
+        cexpo[exposureBand(cr.eDie).name]++;
+      }
+      html = objBlock(chits, n, objectiveExact(cp.val, cp.eo, cp.tn)) +
+             distBlock("Trauma", crank, n, true) + expoBlock(cexpo, n);
+      setHint(fmtN(n) + " throws · " + pct(chits, n).toFixed(1) + "% hit");
+    } else {
+      var hp = readHazard();
+      if (hp.fam.conditions) {
+        out.innerHTML = summary + statCard("Hazard", hp.fam.name,
+          '<div class="note-inline">' + hp.fam.name + ' inflicts Conditions, not Trauma — nothing to simulate on the Trauma track.</div>');
+        setHint("conditions");
+        return;
+      }
+      var hrank = [0, 0, 0, 0, 0, 0];
+      for (var m = 0; m < n; m++) hrank[Math.min(5, resolveHazard(hp).finalRank)]++;
+      html = distBlock("Trauma", hrank, n, true);
+      setHint(fmtN(n) + " hazard throws");
+    }
+    out.innerHTML = summary + html;
   }
 
   // ---- segmented control state
@@ -868,6 +973,7 @@
     else renderHazard();
   }
   $("throwBtn").addEventListener("click", doThrow);
+  $("simBtn").addEventListener("click", renderSim);
   $("clearBtn").addEventListener("click", function () { switchMode(mode); });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey && document.activeElement.tagName !== "BUTTON") { e.preventDefault(); doThrow(); }
