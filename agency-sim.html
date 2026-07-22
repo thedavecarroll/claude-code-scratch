@@ -161,6 +161,22 @@
   .pair-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12.5px; }
   .pair-row select { width: auto; }
 
+  /* trauma ruler — slide the scale after calculation */
+  .ruler { margin: 12px 0 6px; }
+  .ranges-cap { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; font-family: var(--sans); line-height: 1.5; }
+  .ranges-cap b { color: var(--ink); font-weight: 600; }
+  .ruler-track { position: relative; height: 34px; border-radius: 4px; background: var(--inset); border: 1px solid var(--line); }
+  .rseg { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 2px; }
+  .rseg .rl2 { color: #fff; font-size: 10px; font-weight: 700; font-family: var(--sans); letter-spacing: .02em; white-space: nowrap; padding: 0 5px; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+  .rhandle { position: absolute; top: -5px; bottom: -5px; width: 16px; margin-left: -8px; cursor: ew-resize; z-index: 5; touch-action: none; display: flex; align-items: center; justify-content: center; }
+  .rhandle::before { content: ""; width: 2px; height: 100%; background: var(--ink); opacity: .55; }
+  .rhandle::after { content: ""; position: absolute; top: 50%; width: 13px; height: 13px; margin-top: -6.5px; background: var(--surface); border: 2px solid var(--ink); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .rhandle:hover::after { border-color: var(--accent); }
+  .rneedle { position: absolute; top: -9px; bottom: -9px; width: 0; border-left: 2px solid var(--ink); z-index: 6; pointer-events: none; }
+  .rneedle .nlab { position: absolute; top: -17px; left: 50%; transform: translateX(-50%); color: var(--bg); font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+  .ruler-scale { display: flex; justify-content: space-between; font-size: 9px; color: var(--faint); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .ruler-hint { font-size: 10.5px; color: var(--faint); font-family: var(--sans); margin-top: 5px; }
+
   /* sweep */
   .sweeptable { width: 100%; border-collapse: collapse; font-size: 12px; }
   .sweeptable th { font-family: var(--sans); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); text-align: right; padding: 6px 8px; border-bottom: 1.5px solid var(--line-strong); position: sticky; top: 0; background: var(--surface); }
@@ -697,6 +713,7 @@
     pairWrap.innerHTML = effHtml;
 
     $("poolArea").appendChild(work);
+    s.effReg = {};
     if (s.effects.length) {
       $("poolArea").appendChild(pairWrap);
       pairWrap.querySelectorAll("select[data-eff]").forEach(function (sel) {
@@ -705,17 +722,19 @@
       });
     }
   }
-  function renderEffect(j, actIdx, acts) {
-    var s = throwState, c = s.c, act = acts[actIdx];
-    var box = $("poolArea").querySelector('[data-effout="' + j + '"]');
-    var ef = s.faces[s.effects[j]];
-    if (!act.ok) { box.innerHTML = line("Effect face", ef) + '<span class="fl">Paired Action ' + act.n + ' missed — no Effect.</span>'; return; }
+  function bandRangeStr(bi) {
+    var b = TUNING.TRAUMA_BANDS, lo = b[bi][0];
+    return bi < b.length - 1 ? lo + "–" + (b[bi + 1][0] - 1) : lo + "+";
+  }
+  function effectTextHTML(ef, act, c) {
+    if (!act.ok) return line("Effect face", ef) + '<span class="fl">Paired Action ' + act.n + ' missed — no Effect.</span>';
     var result = ef + act.margin + c.base;
+    var bi = traumaIndex(result);
     var out = line("Effect face", ef) + line("Action margin", (act.margin >= 0 ? "+" : "") + act.margin) +
               line("Weapon Base Rank", "+" + c.base + "  (" + c.weapon + ")") + hr() +
-              line("Effect result", '<span class="val">' + result + '</span>');
-    var bi = traumaIndex(result);
-    out += line("Trauma", '<span style="color:var(--' + TCLASS[bi] + ');font-weight:700">' + TUNING.TRAUMA_BANDS[bi][1] + '</span>');
+              line("Effect result", '<span class="val">' + result + '</span>') +
+              line("Trauma", '<span style="color:var(--' + TCLASS[bi] + ');font-weight:700">' + TUNING.TRAUMA_BANDS[bi][1] +
+                   '</span>  <span class="rule">(' + bandRangeStr(bi) + ')</span>');
     if (c.armor) {
       out += line("Armor", "-" + TUNING.ARMOR_RANK_STEP + " rank");
       if (c.ap) out += line("Armor-piercing", TUNING.AP_NEGATES_FULLY ? "negated" : "armor step -" + TUNING.AP_REDUCTION);
@@ -724,7 +743,103 @@
     } else {
       out += line("Armor", "none") + hr() + line("Final Trauma", '<span style="color:var(--' + TCLASS[bi] + ');font-weight:700">' + TUNING.TRAUMA_BANDS[bi][1] + '</span>');
     }
-    box.innerHTML = out;
+    return out;
+  }
+  function renderEffect(j, actIdx, acts) {
+    var s = throwState, c = s.c, act = acts[actIdx];
+    var box = $("poolArea").querySelector('[data-effout="' + j + '"]');
+    var ef = s.faces[s.effects[j]];
+    box.innerHTML = '<div class="work efftext"></div><div class="ruler-mount"></div>';
+    var textEl = box.querySelector(".efftext");
+    textEl.innerHTML = effectTextHTML(ef, act, c);
+    s.effReg = s.effReg || {};
+    if (act.ok) {
+      var result = ef + act.margin + c.base;
+      var ruler = buildRuler(result);
+      box.querySelector(".ruler-mount").appendChild(ruler.el);
+      s.effReg[j] = { textEl: textEl, ef: ef, act: act, ruler: ruler };
+    } else {
+      delete s.effReg[j];
+    }
+  }
+  function onBandsChanged() {
+    var s = throwState;
+    if (s && s.effReg) {
+      Object.keys(s.effReg).forEach(function (j) {
+        var r = s.effReg[j];
+        r.textEl.innerHTML = effectTextHTML(r.ef, r.act, s.c);
+        r.ruler.reposition();
+      });
+    }
+    renderBandEditor(); // keep the distribution editor in sync with the global bands
+  }
+  function buildRuler(markValue) {
+    var bands = TUNING.TRAUMA_BANDS, len = bands.length;
+    var scaleMin = 0;
+    var scaleMax = Math.max(markValue + 2, bands[len - 1][0] + 6, 28);
+    if (scaleMax % 2) scaleMax++;
+    var span = function () { return scaleMax - scaleMin; };
+
+    var el = document.createElement("div"); el.className = "ruler";
+    var cap = document.createElement("div"); cap.className = "ranges-cap";
+    var track = document.createElement("div"); track.className = "ruler-track";
+    var segs = [];
+    for (var i = 0; i < len; i++) { var sg = document.createElement("div"); sg.className = "rseg"; track.appendChild(sg); segs.push(sg); }
+    var needle = document.createElement("div"); needle.className = "rneedle";
+    var nlab = document.createElement("div"); nlab.className = "nlab"; needle.appendChild(nlab); track.appendChild(needle);
+    var handles = [];
+    for (var h = 1; h < len; h++) {
+      var hd = document.createElement("div"); hd.className = "rhandle"; hd.setAttribute("data-b", h);
+      track.appendChild(hd); handles.push(hd);
+      attachHandle(hd, h, track, function () { return { min: scaleMin, max: scaleMax }; });
+    }
+    var scale = document.createElement("div"); scale.className = "ruler-scale";
+    scale.innerHTML = "<span>" + scaleMin + "</span><span>" + Math.round(scaleMax / 2) + "</span><span>" + scaleMax + "</span>";
+    var hint = document.createElement("div"); hint.className = "ruler-hint";
+    hint.textContent = "Drag a boundary to slide the Trauma scale — this reading and the frequency table update live, no re-roll.";
+    el.appendChild(cap); el.appendChild(track); el.appendChild(scale); el.appendChild(hint);
+
+    function reposition() {
+      var sp = span();
+      for (var i = 0; i < len; i++) {
+        var lo = bands[i][0], hi = (i < len - 1 ? bands[i + 1][0] : scaleMax);
+        segs[i].style.left = Math.max(0, (lo - scaleMin) / sp * 100) + "%";
+        segs[i].style.width = Math.max(0, (hi - lo) / sp * 100) + "%";
+        segs[i].style.background = "var(--" + TCLASS[i] + ")";
+        segs[i].innerHTML = '<span class="rl2">' + bands[i][1] + " " + bandRangeStr(i) + "</span>";
+      }
+      for (var k = 0; k < handles.length; k++) {
+        var bi = +handles[k].getAttribute("data-b");
+        handles[k].style.left = (bands[bi][0] - scaleMin) / sp * 100 + "%";
+      }
+      var mb = traumaIndex(markValue);
+      needle.style.left = Math.max(0, Math.min(100, (markValue - scaleMin) / sp * 100)) + "%";
+      needle.style.borderColor = "var(--" + TCLASS[mb] + ")";
+      nlab.textContent = markValue;
+      nlab.style.background = "var(--" + TCLASS[mb] + ")";
+      cap.innerHTML = "result <b>" + markValue + "</b> lands in <b style=\"color:var(--" + TCLASS[mb] + ")\">" +
+        bands[mb][1] + " " + bandRangeStr(mb) + "</b>";
+    }
+    reposition();
+    return { el: el, reposition: reposition };
+  }
+  function attachHandle(hd, i, track, getScale) {
+    hd.addEventListener("pointerdown", function (ev) {
+      ev.preventDefault();
+      function move(e) {
+        var rect = track.getBoundingClientRect(), sc = getScale();
+        var frac = (e.clientX - rect.left) / rect.width;
+        var v = Math.round(sc.min + frac * (sc.max - sc.min));
+        var bands = TUNING.TRAUMA_BANDS, len = bands.length;
+        var lower = bands[i - 1][0] + 1;
+        var upper = (i < len - 1 ? bands[i + 1][0] - 1 : sc.max - 1);
+        v = Math.max(lower, Math.min(upper, v));
+        if (v !== bands[i][0]) { bands[i][0] = v; onBandsChanged(); }
+      }
+      function up() { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); }
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    });
   }
   function line(k, v) { return '<span class="lbl2">' + k.padEnd(16, " ") + '</span>: ' + v + '\n'; }
   function hr() { return '<span class="rule">' + "----------------" + '</span>\n'; }
