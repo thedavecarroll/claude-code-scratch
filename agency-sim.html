@@ -1,0 +1,886 @@
+<title>Agency Unlimited — Combat Simulator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #eef1f4; --surface: #f8fafb; --surface-2: #e9eef2; --inset: #e2e8ee;
+    --ink: #1a2028; --muted: #59636f; --faint: #8b95a1;
+    --line: #d2dae1; --line-strong: #b7c1cb;
+    --accent: #12708f; --accent-soft: #2b93b3;
+    --miss: #9a3a2c; --ok: #2f7d55;
+    --t0: #5f8f4e; --t1: #9d8f34; --t2: #bf7f2b; --t3: #bd5a29; --t4: #9e3628;
+    --grid: rgba(70,110,140,.07);
+    --shadow: 0 1px 0 rgba(255,255,255,.6), 0 14px 34px -22px rgba(20,30,45,.45);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0f14; --surface: #12171f; --surface-2: #171d27; --inset: #0e131a;
+      --ink: #d8dfe7; --muted: #7e8996; --faint: #5a6470;
+      --line: #202834; --line-strong: #303a48;
+      --accent: #58c0d8; --accent-soft: #7ad2e6;
+      --miss: #d0604d; --ok: #67bb87;
+      --t0: #7fb066; --t1: #cbb84e; --t2: #d79f45; --t3: #d67434; --t4: #cf5a48;
+      --grid: rgba(120,170,200,.05);
+      --shadow: 0 1px 0 rgba(255,255,255,.03), 0 20px 44px -26px rgba(0,0,0,.85);
+    }
+  }
+  :root[data-theme="light"]{ --bg:#eef1f4;--surface:#f8fafb;--surface-2:#e9eef2;--inset:#e2e8ee;--ink:#1a2028;--muted:#59636f;--faint:#8b95a1;--line:#d2dae1;--line-strong:#b7c1cb;--accent:#12708f;--accent-soft:#2b93b3;--miss:#9a3a2c;--ok:#2f7d55;--t0:#5f8f4e;--t1:#9d8f34;--t2:#bf7f2b;--t3:#bd5a29;--t4:#9e3628;--grid:rgba(70,110,140,.07);--shadow:0 1px 0 rgba(255,255,255,.6),0 14px 34px -22px rgba(20,30,45,.45);}
+  :root[data-theme="dark"]{ --bg:#0c0f14;--surface:#12171f;--surface-2:#171d27;--inset:#0e131a;--ink:#d8dfe7;--muted:#7e8996;--faint:#5a6470;--line:#202834;--line-strong:#303a48;--accent:#58c0d8;--accent-soft:#7ad2e6;--miss:#d0604d;--ok:#67bb87;--t0:#7fb066;--t1:#cbb84e;--t2:#d79f45;--t3:#d67434;--t4:#cf5a48;--grid:rgba(120,170,200,.05);--shadow:0 1px 0 rgba(255,255,255,.03),0 20px 44px -26px rgba(0,0,0,.85);}
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--ink); background: var(--bg);
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 26px 26px;
+    font-family: var(--mono); line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: clamp(14px, 2.4vw, 34px); }
+
+  header.mast { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; flex-wrap: wrap; border-bottom: 2px solid var(--line-strong); padding-bottom: 16px; }
+  .brand .kicker { font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: .34em; text-transform: uppercase; color: var(--accent); }
+  .brand h1 { font-family: var(--sans); font-weight: 800; letter-spacing: -.01em; margin: 4px 0 5px; font-size: clamp(24px, 3.6vw, 38px); line-height: 1; }
+  .brand .sub { color: var(--muted); font-size: 12.5px; max-width: 62ch; }
+  .brand .sub b { color: var(--ink); font-weight: 600; }
+  .theme-btn { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--surface); border: 1px solid var(--line-strong); padding: 8px 12px; border-radius: 3px; cursor: pointer; }
+  .theme-btn:hover { color: var(--ink); border-color: var(--accent); }
+
+  .tabs { display: flex; gap: 0; margin: 20px 0 18px; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; width: fit-content; max-width: 100%; background: var(--surface); }
+  .tabs button { font-family: var(--sans); font-weight: 600; font-size: 12.5px; letter-spacing: .06em; padding: 11px 20px; background: transparent; border: 0; border-right: 1px solid var(--line); color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .tabs button:last-child { border-right: 0; }
+  .tabs button[aria-selected="true"] { background: var(--accent); color: var(--bg); }
+  .tabs .prim { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .7; margin-left: 7px; }
+
+  .layout { display: grid; grid-template-columns: 320px minmax(0,1fr); gap: 20px; align-items: start; }
+  @media (max-width: 900px){ .layout { grid-template-columns: 1fr; } }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; box-shadow: var(--shadow); }
+  .card > .hd { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 15px; border-bottom: 1px solid var(--line); }
+  .hd .t { font-family: var(--sans); font-weight: 700; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+  .hd .m { font-size: 10.5px; color: var(--faint); }
+  .bd { padding: 14px 15px 16px; }
+
+  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 11px; }
+  .field:last-child { margin-bottom: 0; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  label.lbl { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  input[type=number], select { font-family: var(--mono); font-size: 14px; color: var(--ink); background: var(--inset); border: 1px solid var(--line-strong); border-radius: 3px; padding: 8px 9px; width: 100%; -moz-appearance: textfield; }
+  input[type=number]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  select { cursor: pointer; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; color: var(--ink); }
+  .check input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  fieldset { border: 1px solid var(--line); border-radius: 4px; padding: 12px 13px 13px; margin: 0 0 12px; }
+  fieldset legend { font-family: var(--sans); font-weight: 700; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); padding: 0 5px; }
+  .tn-note { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
+  .tn-note b { color: var(--accent); }
+  .refuse { color: var(--miss); font-weight: 600; }
+
+  details.drawer { margin-top: 4px; border: 1px dashed var(--line-strong); border-radius: 4px; }
+  details.drawer > summary { cursor: pointer; padding: 10px 13px; font-family: var(--sans); font-weight: 700; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); list-style: none; }
+  details.drawer > summary::-webkit-details-marker { display: none; }
+  details.drawer > summary::before { content: "▸ "; color: var(--accent); }
+  details.drawer[open] > summary::before { content: "▾ "; }
+  .drawer .dbody { padding: 4px 13px 14px; border-top: 1px solid var(--line); }
+  .const-grp { margin-top: 12px; }
+  .const-grp h4 { font-family: var(--sans); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; color: var(--faint); margin: 0 0 7px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .mini { font-size: 12px; padding: 6px 7px; }
+  .kv { display: grid; grid-template-columns: 1fr 64px; gap: 6px 8px; align-items: center; }
+  .kv label { font-size: 11px; color: var(--muted); }
+  .env-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .env-tbl th, .env-tbl td { padding: 3px 4px; text-align: center; border-bottom: 1px solid var(--line); }
+  .env-tbl th { color: var(--faint); font-weight: 600; font-family: var(--sans); letter-spacing: .04em; }
+  .env-tbl td:first-child, .env-tbl th:first-child { text-align: left; color: var(--ink); }
+  .env-tbl input[type=number] { width: 46px; padding: 4px; font-size: 11px; }
+  .env-tbl input[type=checkbox] { accent-color: var(--accent); }
+
+  .btn { font-family: var(--sans); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--bg); background: linear-gradient(180deg, var(--accent-soft), var(--accent)); border: 1px solid color-mix(in srgb, var(--accent) 55%, #000); border-radius: 4px; padding: 12px; cursor: pointer; width: 100%; }
+  .btn:hover { filter: brightness(1.06); }
+  .btn:active { transform: translateY(1px); }
+  .btn-ghost { background: var(--inset); color: var(--muted); border: 1px solid var(--line-strong); font-family: var(--mono); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .btn-ghost:hover { color: var(--ink); border-color: var(--accent); filter: none; }
+
+  /* active config strip */
+  .active-strip { font-size: 11.5px; color: var(--muted); background: var(--inset); border: 1px solid var(--line); border-radius: 4px; padding: 9px 12px; margin-bottom: 14px; line-height: 1.55; }
+  .active-strip b { color: var(--ink); font-weight: 600; }
+  .active-strip .sep { color: var(--faint); margin: 0 6px; }
+
+  /* histogram */
+  .hist-wrap { position: relative; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .legend .sw { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .chip { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+  .hist { position: relative; height: 240px; display: flex; align-items: flex-end; gap: 1px; border-bottom: 1.5px solid var(--line-strong); padding-top: 6px; }
+  .hbar { flex: 1 1 0; min-width: 0; position: relative; border-radius: 1px 1px 0 0; transition: height .18s ease; }
+  .hbar .tip { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); font-size: 10px; padding: 2px 6px; border-radius: 3px; white-space: nowrap; opacity: 0; pointer-events: none; margin-bottom: 3px; z-index: 3; }
+  .hbar:hover .tip { opacity: 1; }
+  .boundary { position: absolute; top: -2px; bottom: 0; width: 0; border-left: 1.5px dashed var(--faint); z-index: 2; }
+  .boundary .bl { position: absolute; top: -4px; left: 3px; font-size: 9px; letter-spacing: .04em; color: var(--faint); font-family: var(--sans); font-weight: 700; white-space: nowrap; }
+  .xaxis { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  /* band editor */
+  .bandedit { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 14px 0 4px; }
+  @media (max-width: 560px){ .bandedit { grid-template-columns: repeat(2,1fr); } }
+  .bandcell { border: 1px solid var(--line); border-top: 3px solid var(--bc); border-radius: 3px; padding: 7px 8px; background: var(--inset); }
+  .bandcell .bn { font-family: var(--sans); font-weight: 700; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--bc); }
+  .bandcell .ge { font-size: 10px; color: var(--faint); margin: 3px 0 4px; }
+  .bandcell input { width: 100%; padding: 5px 6px; font-size: 13px; text-align: center; }
+
+  /* stats + tables */
+  .statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px,1fr)); gap: 9px; margin: 14px 0; }
+  .stat { background: var(--inset); border: 1px solid var(--line); border-radius: 4px; padding: 9px 10px; }
+  .stat .k { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .stat .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .pctl { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+  .pctl b { color: var(--ink); }
+  .freqtable { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  .freqtable td { padding: 5px 6px; border-bottom: 1px solid var(--line); }
+  .freqtable td.name { font-weight: 600; }
+  .freqtable td.barcell { width: 55%; }
+  .fbar { height: 13px; border-radius: 2px; min-width: 2px; }
+  .freqtable td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .failline { font-size: 13px; margin: 12px 0 4px; padding: 9px 11px; background: var(--inset); border: 1px solid var(--line); border-left: 3px solid var(--miss); border-radius: 3px; }
+  .failline b { color: var(--miss); }
+  .subhd { font-family: var(--sans); font-weight: 700; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
+
+  /* single throw */
+  .pool { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+  .die { width: 46px; height: 46px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--inset); display: grid; place-items: center; font-size: 19px; font-weight: 600; position: relative; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .die .ix { position: absolute; top: 2px; left: 5px; font-size: 8px; color: var(--faint); }
+  .die[data-role] { cursor: default; }
+  .die[data-role="T"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .die[data-role="A"] { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+  .die[data-role="E"] { border-color: var(--t2); box-shadow: inset 0 0 0 1px var(--t2); }
+  .die .rl { position: absolute; bottom: 1px; right: 4px; font-size: 8px; font-weight: 700; }
+  .die[data-role="T"] .rl { color: var(--accent); } .die[data-role="A"] .rl { color: var(--ok); } .die[data-role="E"] .rl { color: var(--t2); }
+  .assign-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .assign-hint b { color: var(--ink); }
+  .work { font-size: 12.5px; background: var(--inset); border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; margin-top: 12px; white-space: pre-wrap; line-height: 1.55; }
+  .work .lbl2 { color: var(--muted); } .work .val { color: var(--ink); font-weight: 600; }
+  .work .succ { color: var(--ok); font-weight: 700; } .work .fl { color: var(--miss); font-weight: 700; }
+  .work .rule { color: var(--faint); }
+  .pair-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12.5px; }
+  .pair-row select { width: auto; }
+
+  /* sweep */
+  .sweeptable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .sweeptable th { font-family: var(--sans); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); text-align: right; padding: 6px 8px; border-bottom: 1.5px solid var(--line-strong); position: sticky; top: 0; background: var(--surface); }
+  .sweeptable th:first-child, .sweeptable th:nth-child(2), .sweeptable th:nth-child(3) { text-align: left; }
+  .sweeptable td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; }
+  .sweeptable td:first-child, .sweeptable td:nth-child(2), .sweeptable td:nth-child(3) { text-align: left; }
+  .sweeptable tr.bandsep td { border-top: 2px solid var(--line-strong); }
+  .sweeptable .modal { font-weight: 600; }
+  .sweeptable .fpill { display: inline-block; min-width: 44px; text-align: right; }
+  .scroll { overflow-x: auto; }
+  .note { font-size: 11.5px; color: var(--faint); font-family: var(--sans); margin-top: 12px; line-height: 1.5; }
+  .hidden { display: none !important; }
+  @media (prefers-reduced-motion: reduce){ .hbar { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="brand">
+      <span class="kicker">Agency Unlimited · Resolution Bench</span>
+      <h1>Combat Simulator</h1>
+      <span class="sub">Firearms at range. The job: read the raw <b>Effect result</b> distribution across many throws and set the <b>Trauma band</b> boundaries against real frequencies — not by even division. Edit the bands and watch the tally move without re-rolling.</span>
+    </div>
+    <button class="theme-btn" id="themeBtn" type="button">◐ Theme</button>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-view="dist" aria-selected="true">Distribution<span class="prim">primary</span></button>
+    <button role="tab" data-view="single" aria-selected="false">Single throw</button>
+    <button role="tab" data-view="sweep" aria-selected="false">Sweep</button>
+  </div>
+
+  <div class="layout">
+    <!-- ============ CONFIG ============ -->
+    <aside class="card" id="configCard">
+      <div class="hd"><span class="t">Configure</span><span class="m" id="cfgTn">TN —</span></div>
+      <div class="bd">
+        <fieldset>
+          <legend>Character</legend>
+          <div class="row2">
+            <div class="field"><label class="lbl" for="attr">Attribute 1–6</label><input type="number" id="attr" min="1" max="6" value="4" /></div>
+            <div class="field"><label class="lbl" for="comp">Competency</label>
+              <select id="comp"></select></div>
+          </div>
+          <div class="row2">
+            <label class="check"><input type="checkbox" id="aedge" checked /> Action Edge</label>
+            <label class="check"><input type="checkbox" id="tedge" checked /> Timing Edge</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Weapon &amp; range</legend>
+          <div class="row2">
+            <div class="field"><label class="lbl" for="weapon">Weapon</label><select id="weapon"></select></div>
+            <div class="field"><label class="lbl" for="range">Range band</label>
+              <select id="range"><option value="contact">Contact</option><option value="close">Close</option><option value="mid" selected>Mid</option><option value="far">Far</option></select></div>
+          </div>
+          <div class="row2">
+            <label class="check"><input type="checkbox" id="tnOverToggle" /> Override TN</label>
+            <div class="field" style="margin:0"><input type="number" id="tnOver" min="1" value="11" disabled /></div>
+          </div>
+          <div class="tn-note" id="tnNote"></div>
+          <div class="row2" style="margin-top:10px">
+            <label class="check"><input type="checkbox" id="armor" /> Armor</label>
+            <label class="check"><input type="checkbox" id="ap" /> Armor-piercing</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Throw pool</legend>
+          <div class="row2">
+            <div class="field"><label class="lbl" for="adice">Action dice</label><input type="number" id="adice" min="1" value="1" /></div>
+            <div class="field"><label class="lbl" for="edice">Effect dice</label><input type="number" id="edice" min="1" value="1" /></div>
+          </div>
+          <label class="check" style="margin-bottom:8px"><input type="checkbox" id="esame" checked /> Effect dice = Action count</label>
+          <label class="check"><input type="checkbox" id="timing" checked /> Timing die present</label>
+        </fieldset>
+
+        <div class="field" id="nField">
+          <label class="lbl" for="nthrows">Throws (distribution)</label>
+          <select id="nthrows"><option>1000</option><option selected>10000</option><option>100000</option></select>
+        </div>
+        <div class="field hidden" id="trialsField">
+          <label class="lbl" for="trials">Trials per sweep cell</label>
+          <select id="trials"><option>500</option><option selected>2000</option><option>5000</option></select>
+        </div>
+
+        <details class="drawer" id="constDrawer">
+          <summary>Tuning constants — NOT FINAL</summary>
+          <div class="dbody">
+            <div class="const-grp">
+              <h4>Edges &amp; envelope</h4>
+              <div class="kv">
+                <label>Action Edge value</label><input type="number" id="k-aedge" value="1" class="mini" />
+                <label>Timing Edge value</label><input type="number" id="k-tedge" value="2" class="mini" />
+                <label>Out-of-envelope penalty</label><input type="number" id="k-oop" value="2" class="mini" />
+              </div>
+            </div>
+            <div class="const-grp">
+              <h4>Range band base TN</h4>
+              <div class="kv" id="k-ranges"></div>
+            </div>
+            <div class="const-grp">
+              <h4>Weapons — base rank &amp; envelope</h4>
+              <div class="scroll"><table class="env-tbl" id="k-weapons"></table></div>
+            </div>
+            <div class="const-grp">
+              <h4>Competency tiers</h4>
+              <div class="kv" id="k-comp"></div>
+            </div>
+            <div class="const-grp">
+              <h4>Armor</h4>
+              <div class="kv">
+                <label>Armor rank step</label><input type="number" id="k-armstep" value="1" class="mini" />
+                <label>AP negates fully</label>
+                <select id="k-apmode" class="mini"><option value="1" selected>yes</option><option value="0">no</option></select>
+                <label>AP reduction (if not full)</label><input type="number" id="k-apred" value="1" class="mini" />
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+    </aside>
+
+    <!-- ============ OUTPUT ============ -->
+    <section class="card">
+      <div class="hd"><span class="t" id="outTitle">Raw Effect Distribution</span><span class="m" id="outMeta"></span></div>
+      <div class="bd">
+        <div class="active-strip" id="activeStrip"></div>
+
+        <!-- DISTRIBUTION -->
+        <div id="view-dist">
+          <div class="legend" id="legend"></div>
+          <div class="hist-wrap"><div class="hist" id="hist"></div><div class="xaxis" id="xaxis"></div></div>
+
+          <div class="subhd">Trauma bands — lower bound of each rank (edit to retune; no re-roll)</div>
+          <div class="bandedit" id="bandedit"></div>
+
+          <div class="statgrid" id="stats"></div>
+          <div class="pctl" id="pctl"></div>
+          <div class="failline" id="failline"></div>
+
+          <div class="subhd">Trauma frequency — final, after armor/AP</div>
+          <table class="freqtable" id="freq"></table>
+          <div class="note">Histogram bars are coloured by where each Effect result lands on the current ladder (pre-armor). The frequency table applies armor/AP on top. Change a band's lower bound to see both recolour and re-tally instantly against the same 10k sample.</div>
+        </div>
+
+        <!-- SINGLE THROW -->
+        <div id="view-single" class="hidden">
+          <button class="btn" id="rollBtn" type="button" style="margin-bottom:12px">Roll the pool</button>
+          <div id="poolArea"></div>
+        </div>
+
+        <!-- SWEEP -->
+        <div id="view-sweep" class="hidden">
+          <button class="btn" id="sweepBtn" type="button" style="margin-bottom:14px">Run sweep — range × competency × armor</button>
+          <div class="scroll"><div id="sweepOut"></div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var d12 = function () { return 1 + Math.floor(Math.random() * 12); };
+
+  // ===================== TUNING CONSTANTS (mutable) =====================
+  var RANGE_ORDER = ["contact", "close", "mid", "far"];
+  var TUNING = {
+    COMPETENCY_TIERS: {
+      untrained_discipline: null,
+      untrained_method: -2,
+      untrained_practice: -1,
+      proficient: 0,
+      untrained_talent: 0,
+      expert: 1,
+      master: 2
+    },
+    ACTION_EDGE_VALUE: 1,
+    TIMING_EDGE_VALUE: 2,
+    RANGE_BANDS: { contact: 5, close: 7, mid: 11, far: 15 },
+    OUT_OF_ENVELOPE_PENALTY: 2,
+    WEAPONS: {
+      handgun: { base: 3, envelope: ["contact", "close", "mid"] },
+      rifle:   { base: 4, envelope: ["close", "mid", "far"] },
+      smg:     { base: 3, envelope: ["contact", "close", "mid"] },
+      shotgun: { base: 4, envelope: ["contact", "close"] }
+    },
+    ARMOR_RANK_STEP: 1,
+    AP_NEGATES_FULLY: true,
+    AP_REDUCTION: 1,
+    TRAUMA_BANDS: [[0, "Graze"], [8, "Wound"], [14, "Serious"], [20, "Critical"], [26, "Lethal"]]
+  };
+  var TCLASS = ["t0", "t1", "t2", "t3", "t4"];
+
+  // ===================== ENGINE (integer arithmetic) =====================
+  function competencyAdj(tier) { return TUNING.COMPETENCY_TIERS[tier]; }
+  function envelopeDistance(weapon, band) {
+    var env = TUNING.WEAPONS[weapon].envelope.map(function (b) { return RANGE_ORDER.indexOf(b); });
+    var idx = RANGE_ORDER.indexOf(band), lo = Math.min.apply(null, env), hi = Math.max.apply(null, env);
+    if (idx < lo) return lo - idx;
+    if (idx > hi) return idx - hi;
+    return 0;
+  }
+  function deriveTN(weapon, band) {
+    var base = TUNING.RANGE_BANDS[band];
+    var dist = envelopeDistance(weapon, band);
+    var pen = dist * TUNING.OUT_OF_ENVELOPE_PENALTY;
+    return { tn: base + pen, base: base, dist: dist, pen: pen };
+  }
+  function traumaIndex(result) {
+    var bands = TUNING.TRAUMA_BANDS, idx = 0;
+    for (var i = 0; i < bands.length; i++) {
+      if (result >= bands[i][0]) idx = i; else break;
+    }
+    return idx;
+  }
+  function armorStep(armor, ap) {
+    if (!armor) return 0;
+    if (ap) return TUNING.AP_NEGATES_FULLY ? 0 : Math.max(0, TUNING.ARMOR_RANK_STEP - TUNING.AP_REDUCTION);
+    return TUNING.ARMOR_RANK_STEP;
+  }
+  function applyInjury(idx, armor, ap) { return Math.max(0, idx - armorStep(armor, ap)); }
+
+  // ===================== CONFIG READ =====================
+  function readConfig() {
+    var c = {};
+    c.attribute = clampInt($("attr").value, 1, 6, 4);
+    c.competency = $("comp").value;
+    c.actionEdge = $("aedge").checked;
+    c.timingEdge = $("tedge").checked;
+    c.weapon = $("weapon").value;
+    c.range = $("range").value;
+    c.tnOverride = $("tnOverToggle").checked ? clampInt($("tnOver").value, 1, 99, 1) : null;
+    c.armor = $("armor").checked;
+    c.ap = $("ap").checked;
+    c.actionDice = clampInt($("adice").value, 1, 20, 1);
+    c.effectDice = $("esame").checked ? c.actionDice : clampInt($("edice").value, 1, 20, 1);
+    c.timing = $("timing").checked;
+    c.base = TUNING.WEAPONS[c.weapon].base;
+    c.tn = c.tnOverride !== null ? c.tnOverride : deriveTN(c.weapon, c.range).tn;
+    return c;
+  }
+  function clampInt(v, lo, hi, dflt) {
+    var n = parseInt(v, 10);
+    if (isNaN(n)) return dflt;
+    return Math.max(lo, Math.min(hi, n));
+  }
+  function permitted(c) { return competencyAdj(c.competency) !== null; }
+
+  // ===================== DISTRIBUTION =====================
+  var lastSample = null; // { effectResults, failures, resolved, config }
+
+  function runSamples(c, n) {
+    var attr = c.attribute, comp = competencyAdj(c.competency), tn = c.tn, base = c.base;
+    var aEdge = c.actionEdge ? TUNING.ACTION_EDGE_VALUE : 0;
+    var a = c.actionDice, e = c.effectDice;
+    var results = [], failures = 0, resolved = 0;
+    for (var it = 0; it < n; it++) {
+      var pool = [];
+      for (var k = 0; k < a + e; k++) pool.push(d12());
+      pool.sort(function (x, y) { return y - x; });
+      for (var i = 0; i < e; i++) {
+        var af = pool[Math.min(i, a - 1)];
+        var total = af + attr + comp + aEdge;
+        var margin = total - tn;
+        resolved++;
+        if (total < tn) { failures++; continue; }
+        results.push(pool[a + i] + margin + base);
+      }
+    }
+    return { effectResults: results, failures: failures, resolved: resolved, config: c };
+  }
+
+  // stats
+  function percentile(sorted, p) {
+    var n = sorted.length; if (!n) return null;
+    var rank = Math.max(1, Math.ceil(p / 100 * n));
+    return sorted[rank - 1];
+  }
+  function median(sorted) {
+    var n = sorted.length; if (!n) return null;
+    return n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  }
+  function modeSmallest(arr) {
+    var m = {}, best = -1, bestV = null;
+    for (var i = 0; i < arr.length; i++) { var v = arr[i]; m[v] = (m[v] || 0) + 1;
+      if (m[v] > best || (m[v] === best && v < bestV)) { best = m[v]; bestV = v; } }
+    return bestV;
+  }
+  function fmt(x) { return (x % 1 !== 0) ? x.toFixed(1) : String(x); }
+
+  // ===================== RENDER: active strip + TN note =====================
+  function tnExplain(c) {
+    if (c.tnOverride !== null) return "TN " + c.tn + " (operator override)";
+    var d = deriveTN(c.weapon, c.range);
+    if (d.dist === 0) return "TN " + d.tn + " (" + c.range + " · " + c.weapon + " in envelope)";
+    return "TN " + d.tn + " (" + c.range + " · " + c.weapon + " " + d.dist + " band" + (d.dist !== 1 ? "s" : "") +
+           " out: " + d.base + " + " + d.pen + ")";
+  }
+  function renderActive(c) {
+    var adj = competencyAdj(c.competency);
+    var compTxt = c.competency + (adj === null ? " (no attempt)" : " (" + (adj >= 0 ? "+" : "") + adj + ")");
+    $("cfgTn").textContent = "TN " + c.tn;
+    $("tnNote").innerHTML = permitted(c) ? "<b>" + tnExplain(c) + "</b>" :
+      '<span class="refuse">Competency permits no attempt — throw refused.</span>';
+    var parts = [
+      "Attr <b>" + c.attribute + "</b>", "Comp <b>" + compTxt + "</b>",
+      (c.actionEdge ? "Action Edge <b>+" + TUNING.ACTION_EDGE_VALUE + "</b>" : "no Action Edge"),
+      "<b>" + c.weapon + "</b> (base " + c.base + ")",
+      "<b>" + tnExplain(c).replace(/^TN /, "TN ") + "</b>",
+      "Armor <b>" + (c.armor ? "on" : "off") + "</b>", "AP <b>" + (c.ap ? "on" : "off") + "</b>",
+      c.actionDice + "A/" + c.effectDice + "E" + (c.timing ? "/1T" : "")
+    ];
+    $("activeStrip").innerHTML = parts.join('<span class="sep">·</span>');
+  }
+
+  // ===================== RENDER: distribution =====================
+  function renderLegend() {
+    var b = TUNING.TRAUMA_BANDS, h = "";
+    for (var i = 0; i < b.length; i++)
+      h += '<span class="sw"><span class="chip" style="background:var(--' + TCLASS[i] + ')"></span>' + b[i][1] + '</span>';
+    $("legend").innerHTML = h;
+  }
+  function renderHistogram(results) {
+    var hist = $("hist");
+    if (!results.length) { hist.innerHTML = '<div class="assign-hint" style="margin:auto">No successful hits — no Effect results.</div>'; $("xaxis").innerHTML = ""; return; }
+    var lo = Math.min.apply(null, results), hi = Math.max.apply(null, results);
+    var counts = {}; for (var i = 0; i < results.length; i++) counts[results[i]] = (counts[results[i]] || 0) + 1;
+    var peak = 0; for (var v = lo; v <= hi; v++) if ((counts[v] || 0) > peak) peak = counts[v] || 0;
+    var total = results.length;
+    var bands = TUNING.TRAUMA_BANDS;
+    var html = "";
+    for (var val = lo; val <= hi; val++) {
+      var c = counts[val] || 0;
+      var pctv = (100 * c / total);
+      var hpct = peak ? (c / peak * 100) : 0;
+      var ti = traumaIndex(val);
+      // boundary marker if a band lower-bound falls at this value (and it's not the very first bar)
+      var marker = "";
+      for (var bi = 0; bi < bands.length; bi++) {
+        if (bands[bi][0] === val && val > lo) {
+          marker = '<span class="boundary"><span class="bl">' + bands[bi][1] + ' ≥' + val + '</span></span>';
+        }
+      }
+      html += '<div class="hbar" style="height:' + hpct.toFixed(2) + '%;background:var(--' + TCLASS[ti] + ')">' +
+              marker + '<span class="tip">' + val + ' · ' + c + ' · ' + pctv.toFixed(1) + '%</span></div>';
+    }
+    hist.innerHTML = html;
+    $("xaxis").innerHTML = '<span>' + lo + '</span><span>' + Math.round((lo + hi) / 2) + '</span><span>' + hi + '</span>';
+  }
+  function renderStats(results, failures, resolved) {
+    if (!results.length) {
+      $("stats").innerHTML = ""; $("pctl").innerHTML = "";
+      $("failline").innerHTML = "<b>Failure rate: 100%</b> — no Action met the TN.";
+      $("freq").innerHTML = ""; return;
+    }
+    var sorted = results.slice().sort(function (a, b) { return a - b; });
+    var n = sorted.length, sum = 0; for (var i = 0; i < n; i++) sum += sorted[i];
+    var stats = [
+      ["Mean", (sum / n).toFixed(1)], ["Median", fmt(median(sorted))], ["Mode", modeSmallest(sorted)],
+      ["Min", sorted[0]], ["Max", sorted[n - 1]], ["Hits", n]
+    ];
+    $("stats").innerHTML = stats.map(function (s) {
+      return '<div class="stat"><div class="k">' + s[0] + '</div><div class="v">' + s[1] + '</div></div>'; }).join("");
+    var ps = [10, 25, 50, 75, 90, 95, 99];
+    $("pctl").innerHTML = ps.map(function (p) { return "p" + p + " <b>" + percentile(sorted, p) + "</b>"; }).join(" ");
+    var failPct = resolved ? (100 * failures / resolved) : 0;
+    $("failline").innerHTML = "<b>Failure rate: " + failPct.toFixed(1) + "%</b> — " + failures +
+      " of " + resolved + " resolved Actions missed the TN (excluded from the distribution).";
+    renderFreq(results);
+  }
+  function renderFreq(results) {
+    var c = lastSample.config;
+    var bands = TUNING.TRAUMA_BANDS;
+    var tally = new Array(bands.length).fill(0);
+    for (var i = 0; i < results.length; i++) tally[applyInjury(traumaIndex(results[i]), c.armor, c.ap)]++;
+    var total = results.length, max = Math.max.apply(null, tally) || 1;
+    var rows = "";
+    for (var r = 0; r < bands.length; r++) {
+      var pctv = total ? (100 * tally[r] / total) : 0;
+      rows += '<tr><td class="name" style="color:var(--' + TCLASS[r] + ')">' + bands[r][1] + '</td>' +
+              '<td class="barcell"><div class="fbar" style="width:' + (tally[r] / max * 100).toFixed(1) + '%;background:var(--' + TCLASS[r] + ')"></div></td>' +
+              '<td class="num">' + pctv.toFixed(1) + '%  (' + tally[r] + ')</td></tr>';
+    }
+    $("freq").innerHTML = rows;
+  }
+  function renderBandEditor() {
+    var b = TUNING.TRAUMA_BANDS, h = "";
+    for (var i = 0; i < b.length; i++) {
+      h += '<div class="bandcell" style="--bc:var(--' + TCLASS[i] + ')">' +
+           '<div class="bn">' + b[i][1] + '</div><div class="ge">result ≥</div>' +
+           '<input type="number" data-band="' + i + '" value="' + b[i][0] + '" /></div>';
+    }
+    $("bandedit").innerHTML = h;
+    $("bandedit").querySelectorAll("input").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var i = +inp.getAttribute("data-band");
+        var v = parseInt(inp.value, 10);
+        if (isNaN(v)) return;
+        TUNING.TRAUMA_BANDS[i][0] = v;
+        recomputeBands();
+      });
+    });
+  }
+  function recomputeBands() {
+    // no re-roll: recolour + re-tally against the cached sample
+    renderLegend();
+    if (lastSample) {
+      renderHistogram(lastSample.effectResults);
+      renderFreq(lastSample.effectResults);
+    }
+  }
+
+  function runDistribution() {
+    var c = readConfig();
+    renderActive(c);
+    $("outTitle").textContent = "Raw Effect Distribution";
+    if (!permitted(c)) {
+      $("outMeta").textContent = "";
+      $("hist").innerHTML = '<div class="assign-hint" style="margin:auto"></div>';
+      $("hist").innerHTML = ""; $("xaxis").innerHTML = "";
+      $("stats").innerHTML = ""; $("pctl").innerHTML = ""; $("freq").innerHTML = "";
+      $("failline").innerHTML = '<span class="refuse">No attempt permitted — this competency forbids the throw.</span>';
+      lastSample = null;
+      return;
+    }
+    var n = +$("nthrows").value;
+    lastSample = runSamples(c, n);
+    $("outMeta").textContent = n.toLocaleString() + " throws";
+    renderLegend();
+    renderHistogram(lastSample.effectResults);
+    renderStats(lastSample.effectResults, lastSample.failures, lastSample.resolved);
+  }
+
+  // ===================== SINGLE THROW =====================
+  var throwState = null;
+  function rollPool() {
+    var c = readConfig();
+    renderActive(c);
+    if (!permitted(c)) { $("poolArea").innerHTML = '<div class="failline"><span class="refuse">No attempt permitted — this competency forbids the throw.</span></div>'; return; }
+    var a = c.actionDice, e = c.effectDice, t = c.timing ? 1 : 0;
+    var faces = []; for (var i = 0; i < a + e + t; i++) faces.push(d12());
+    throwState = { c: c, faces: faces, consumed: {}, timing: null, actions: [], effects: [], t: t, a: a, e: e };
+    renderPool();
+  }
+  function nextSlot(s) {
+    if (s.t && s.timing === null) return { role: "T", label: "Timing" };
+    if (s.actions.length < s.a) return { role: "A", label: "Action " + (s.actions.length + 1) };
+    if (s.effects.length < s.e) return { role: "E", label: "Effect " + (s.effects.length + 1) };
+    return null;
+  }
+  function renderPool() {
+    var s = throwState, slot = nextSlot(s);
+    var parts = [];
+    if (s.t) parts.push("1 Timing"); parts.push(s.a + " Action"); parts.push(s.e + " Effect");
+    var roleOf = {};
+    if (s.timing !== null) roleOf[s.timing] = "T";
+    s.actions.forEach(function (ix) { roleOf[ix] = "A"; });
+    s.effects.forEach(function (ix) { roleOf[ix] = "E"; });
+    var dice = "";
+    for (var i = 0; i < s.faces.length; i++) {
+      var role = roleOf[i];
+      var attrs = role ? ' data-role="' + role + '"' : "";
+      dice += '<div class="die"' + attrs + ' data-ix="' + i + '"><span class="ix">' + (i + 1) + '</span>' +
+              s.faces[i] + (role ? '<span class="rl">' + role + '</span>' : '') + '</div>';
+    }
+    var hint = slot ? 'Assign <b>' + slot.label + '</b> — click a die.' : 'All dice assigned. Resolution below.';
+    var html = '<div class="assign-hint">THROW — ' + parts.join(", ") + '  (' + s.faces.length + ' dice). ' + hint + '</div>' +
+               '<div class="pool">' + dice + '</div>' +
+               '<button class="btn btn-ghost" id="reassignBtn" type="button" style="width:auto;padding:8px 14px">Reset assignment</button>';
+    $("poolArea").innerHTML = html;
+    $("poolArea").querySelectorAll(".die").forEach(function (d) {
+      d.addEventListener("click", function () { clickDie(+d.getAttribute("data-ix")); });
+    });
+    $("reassignBtn").addEventListener("click", function () {
+      throwState.consumed = {}; throwState.timing = null; throwState.actions = []; throwState.effects = []; renderPool();
+    });
+    if (!slot) renderWorking();
+  }
+  function clickDie(ix) {
+    var s = throwState; if (s.consumed[ix]) return;
+    var slot = nextSlot(s); if (!slot) return;
+    s.consumed[ix] = true;
+    if (slot.role === "T") s.timing = ix;
+    else if (slot.role === "A") s.actions.push(ix);
+    else s.effects.push(ix);
+    renderPool();
+  }
+  function esc(t) { return String(t).replace(/[&<>]/g, function (m) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]; }); }
+  function renderWorking() {
+    var s = throwState, c = s.c, comp = competencyAdj(c.competency), tn = c.tn;
+    var out = "";
+    if (s.timing !== null) {
+      var tf = s.faces[s.timing], te = c.timingEdge ? TUNING.TIMING_EDGE_VALUE : 0;
+      out += '<span class="rule">TIMING</span>\n';
+      out += line("Timing face", tf) + line("Attribute", "+" + c.attribute);
+      if (c.timingEdge) out += line("Timing Edge", "+" + te);
+      out += hr() + line("Timing total", '<span class="val">' + (tf + c.attribute + te) + '</span>') + "\n";
+    }
+    var acts = [];
+    for (var i = 0; i < s.actions.length; i++) {
+      var af = s.faces[s.actions[i]];
+      var ae = c.actionEdge ? TUNING.ACTION_EDGE_VALUE : 0;
+      var total = af + c.attribute + comp + ae, margin = total - tn, ok = total >= tn;
+      out += '<span class="rule">ACTION ' + (i + 1) + '</span>\n';
+      out += line("Action face", af) + line("Attribute", "+" + c.attribute) +
+             line("Competency", (comp >= 0 ? "+" : "") + comp + "  (" + c.competency + ")");
+      if (c.actionEdge) out += line("Action Edge", "+" + ae);
+      out += hr() + line("Action total", '<span class="val">' + total + '</span>') +
+             line("TN", tn) +
+             line("Margin", '<span class="val">' + (margin >= 0 ? "+" : "") + margin + '</span>  ' +
+                  (ok ? '<span class="succ">SUCCESS</span>' : '<span class="fl">MISS</span>')) + "\n";
+      acts.push({ n: i + 1, margin: margin, ok: ok });
+    }
+    $("poolArea").querySelectorAll(".work").forEach(function (x) { x.remove() });
+    var work = document.createElement("div");
+    work.className = "work";
+    work.innerHTML = out;
+
+    // pairing UI
+    var pairWrap = document.createElement("div");
+    var effHtml = '<div class="subhd">Pair each Effect with an Action</div>';
+    for (var j = 0; j < s.effects.length; j++) {
+      var opts = acts.map(function (act) {
+        return '<option value="' + (act.n - 1) + '">Action ' + act.n + ' (margin ' + (act.margin >= 0 ? "+" : "") + act.margin + ', ' + (act.ok ? "hit" : "miss") + ')</option>';
+      }).join("");
+      effHtml += '<div class="pair-row">Effect ' + (j + 1) + ' (face ' + s.faces[s.effects[j]] + ') → ' +
+                 '<select data-eff="' + j + '">' + opts + '</select></div>' +
+                 '<div class="work" data-effout="' + j + '"></div>';
+    }
+    pairWrap.innerHTML = effHtml;
+
+    $("poolArea").appendChild(work);
+    if (s.effects.length) {
+      $("poolArea").appendChild(pairWrap);
+      pairWrap.querySelectorAll("select[data-eff]").forEach(function (sel) {
+        sel.addEventListener("change", function () { renderEffect(+sel.getAttribute("data-eff"), +sel.value, acts); });
+        renderEffect(+sel.getAttribute("data-eff"), +sel.value, acts);
+      });
+    }
+  }
+  function renderEffect(j, actIdx, acts) {
+    var s = throwState, c = s.c, act = acts[actIdx];
+    var box = $("poolArea").querySelector('[data-effout="' + j + '"]');
+    var ef = s.faces[s.effects[j]];
+    if (!act.ok) { box.innerHTML = line("Effect face", ef) + '<span class="fl">Paired Action ' + act.n + ' missed — no Effect.</span>'; return; }
+    var result = ef + act.margin + c.base;
+    var out = line("Effect face", ef) + line("Action margin", (act.margin >= 0 ? "+" : "") + act.margin) +
+              line("Weapon Base Rank", "+" + c.base + "  (" + c.weapon + ")") + hr() +
+              line("Effect result", '<span class="val">' + result + '</span>');
+    var bi = traumaIndex(result);
+    out += line("Trauma", '<span style="color:var(--' + TCLASS[bi] + ');font-weight:700">' + TUNING.TRAUMA_BANDS[bi][1] + '</span>');
+    if (c.armor) {
+      out += line("Armor", "-" + TUNING.ARMOR_RANK_STEP + " rank");
+      if (c.ap) out += line("Armor-piercing", TUNING.AP_NEGATES_FULLY ? "negated" : "armor step -" + TUNING.AP_REDUCTION);
+      var fi = applyInjury(bi, c.armor, c.ap);
+      out += hr() + line("Final Trauma", '<span style="color:var(--' + TCLASS[fi] + ');font-weight:700">' + TUNING.TRAUMA_BANDS[fi][1] + '</span>');
+    } else {
+      out += line("Armor", "none") + hr() + line("Final Trauma", '<span style="color:var(--' + TCLASS[bi] + ');font-weight:700">' + TUNING.TRAUMA_BANDS[bi][1] + '</span>');
+    }
+    box.innerHTML = out;
+  }
+  function line(k, v) { return '<span class="lbl2">' + k.padEnd(16, " ") + '</span>: ' + v + '\n'; }
+  function hr() { return '<span class="rule">' + "----------------" + '</span>\n'; }
+
+  // ===================== SWEEP =====================
+  var SWEEP_COMP = ["untrained_method", "untrained_practice", "proficient", "expert", "master"];
+  function runSweep() {
+    var base = readConfig();
+    renderActive(base);
+    var trials = +$("trials").value;
+    var rows = "";
+    RANGE_ORDER.forEach(function (band, ri) {
+      SWEEP_COMP.forEach(function (comp) {
+        [false, true].forEach(function (armor) {
+          var c = Object.assign({}, base);
+          c.range = band; c.tnOverride = null; c.competency = comp; c.armor = armor;
+          c.tn = deriveTN(c.weapon, band).tn;
+          var s = runSamples(c, trials);
+          var res = s.effectResults, failPct = s.resolved ? (100 * s.failures / s.resolved) : 0;
+          var first = (comp === SWEEP_COMP[0] && armor === false && ri > 0) ? " bandsep" : "";
+          if (!res.length) {
+            rows += '<tr class="' + first.trim() + '"><td>' + band + '</td><td>' + comp + '</td><td>' + (armor ? "on" : "off") + '</td>' +
+                    '<td>' + c.tn + '</td><td>' + failPct.toFixed(1) + '</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>';
+          } else {
+            var sorted = res.slice().sort(function (a, b) { return a - b; });
+            var sum = 0; for (var i = 0; i < sorted.length; i++) sum += sorted[i];
+            var finals = res.map(function (r) { return applyInjury(traumaIndex(r), c.armor, c.ap); });
+            var modal = modeSmallest(finals);
+            rows += '<tr class="' + first.trim() + '"><td>' + band + '</td><td>' + comp + '</td><td>' + (armor ? "on" : "off") + '</td>' +
+                    '<td>' + c.tn + '</td><td><span class="fpill">' + failPct.toFixed(1) + '</span></td>' +
+                    '<td>' + (sum / sorted.length).toFixed(1) + '</td><td>' + fmt(median(sorted)) + '</td>' +
+                    '<td>' + percentile(sorted, 90) + '</td><td>' + sorted[sorted.length - 1] + '</td>' +
+                    '<td class="modal" style="color:var(--' + TCLASS[modal] + ')">' + TUNING.TRAUMA_BANDS[modal][1] + '</td></tr>';
+          }
+        });
+      });
+    });
+    $("outTitle").textContent = "Sweep";
+    $("outMeta").textContent = trials.toLocaleString() + " trials/cell · " + base.weapon;
+    $("sweepOut").innerHTML =
+      '<table class="sweeptable"><thead><tr>' +
+      ['Range','Competency','Armor','TN','Fail%','EffMean','EffMed','Effp90','EffMax','ModalTrauma']
+        .map(function (h) { return '<th>' + h + '</th>'; }).join("") +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ===================== CONSTANTS EDITOR =====================
+  function buildConstEditor() {
+    // competency select + weapon select
+    var comp = $("comp"); comp.innerHTML = Object.keys(TUNING.COMPETENCY_TIERS).map(function (k) {
+      var v = TUNING.COMPETENCY_TIERS[k];
+      return '<option value="' + k + '"' + (k === "expert" ? " selected" : "") + '>' + k + (v === null ? " (—)" : " (" + (v >= 0 ? "+" : "") + v + ")") + '</option>';
+    }).join("");
+    var wsel = $("weapon"); wsel.innerHTML = Object.keys(TUNING.WEAPONS).map(function (k) {
+      return '<option value="' + k + '">' + k + " (base " + TUNING.WEAPONS[k].base + ")</option>";
+    }).join("");
+
+    // range base TNs
+    $("k-ranges").innerHTML = RANGE_ORDER.map(function (b) {
+      return '<label>' + b + '</label><input type="number" class="mini" data-krange="' + b + '" value="' + TUNING.RANGE_BANDS[b] + '" />';
+    }).join("");
+    // weapons env table
+    var wt = '<tr><th>weapon</th><th>base</th>' + RANGE_ORDER.map(function (b) { return '<th>' + b.slice(0, 4) + '</th>'; }).join("") + '</tr>';
+    Object.keys(TUNING.WEAPONS).forEach(function (w) {
+      wt += '<tr><td>' + w + '</td><td><input type="number" data-kwbase="' + w + '" value="' + TUNING.WEAPONS[w].base + '" /></td>' +
+        RANGE_ORDER.map(function (b) {
+          var on = TUNING.WEAPONS[w].envelope.indexOf(b) >= 0 ? " checked" : "";
+          return '<td><input type="checkbox" data-kwenv="' + w + '|' + b + '"' + on + '></td>';
+        }).join("") + '</tr>';
+    });
+    $("k-weapons").innerHTML = wt;
+    // competency tiers
+    $("k-comp").innerHTML = Object.keys(TUNING.COMPETENCY_TIERS).map(function (k) {
+      var v = TUNING.COMPETENCY_TIERS[k];
+      if (v === null) return '<label>' + k + '</label><span style="font-size:11px;color:var(--faint)">no attempt</span>';
+      return '<label>' + k + '</label><input type="number" class="mini" data-kcomp="' + k + '" value="' + v + '" />';
+    }).join("");
+
+    // wire constant inputs
+    $("k-aedge").addEventListener("input", function () { TUNING.ACTION_EDGE_VALUE = clampInt(this.value, 0, 20, 1); reflow(); });
+    $("k-tedge").addEventListener("input", function () { TUNING.TIMING_EDGE_VALUE = clampInt(this.value, 0, 20, 2); reflow(); });
+    $("k-oop").addEventListener("input", function () { TUNING.OUT_OF_ENVELOPE_PENALTY = clampInt(this.value, 0, 20, 2); reflow(); });
+    $("k-armstep").addEventListener("input", function () { TUNING.ARMOR_RANK_STEP = clampInt(this.value, 0, 4, 1); reflow(); });
+    $("k-apmode").addEventListener("change", function () { TUNING.AP_NEGATES_FULLY = this.value === "1"; reflow(); });
+    $("k-apred").addEventListener("input", function () { TUNING.AP_REDUCTION = clampInt(this.value, 0, 4, 1); reflow(); });
+    $("constDrawer").querySelectorAll("[data-krange]").forEach(function (inp) {
+      inp.addEventListener("input", function () { TUNING.RANGE_BANDS[inp.getAttribute("data-krange")] = clampInt(inp.value, 1, 99, 5); reflow(); });
+    });
+    $("constDrawer").querySelectorAll("[data-kwbase]").forEach(function (inp) {
+      inp.addEventListener("input", function () { TUNING.WEAPONS[inp.getAttribute("data-kwbase")].base = clampInt(inp.value, 0, 20, 3); reflow(); });
+    });
+    $("constDrawer").querySelectorAll("[data-kwenv]").forEach(function (inp) {
+      inp.addEventListener("change", function () {
+        var pair = inp.getAttribute("data-kwenv").split("|"), w = pair[0], b = pair[1];
+        var env = TUNING.WEAPONS[w].envelope, k = env.indexOf(b);
+        if (inp.checked && k < 0) env.push(b); else if (!inp.checked && k >= 0) env.splice(k, 1);
+        reflow();
+      });
+    });
+    $("constDrawer").querySelectorAll("[data-kcomp]").forEach(function (inp) {
+      inp.addEventListener("input", function () { TUNING.COMPETENCY_TIERS[inp.getAttribute("data-kcomp")] = clampInt(inp.value, -9, 9, 0); reflow(); });
+    });
+  }
+
+  // ===================== WIRING =====================
+  var view = "dist";
+  function reflow() {
+    // a constant/config change: re-run the active view
+    if (view === "dist") runDistribution();
+    else if (view === "sweep") { /* sweep is button-driven */ }
+    else { /* single: keep current pool; just refresh active strip */ renderActive(readConfig()); }
+    renderBandEditor();
+  }
+  var debounceTimer = null;
+  function scheduleReflow() { clearTimeout(debounceTimer); debounceTimer = setTimeout(reflow, 120); }
+
+  function switchView(v) {
+    view = v;
+    ["dist", "single", "sweep"].forEach(function (x) { $("view-" + x).classList.toggle("hidden", x !== v); });
+    document.querySelectorAll(".tabs button").forEach(function (b) { b.setAttribute("aria-selected", b.getAttribute("data-view") === v ? "true" : "false"); });
+    $("nField").classList.toggle("hidden", v !== "dist");
+    $("trialsField").classList.toggle("hidden", v !== "sweep");
+    if (v === "dist") runDistribution();
+    else if (v === "single") { renderActive(readConfig()); $("poolArea").innerHTML = '<div class="assign-hint">Roll the pool to begin.</div>'; }
+    else { renderActive(readConfig()); $("sweepOut").innerHTML = '<div class="assign-hint">Run the sweep to compare configurations.</div>'; }
+  }
+
+  document.querySelectorAll(".tabs button").forEach(function (b) {
+    b.addEventListener("click", function () { switchView(b.getAttribute("data-view")); });
+  });
+
+  // config inputs trigger reflow
+  ["attr", "comp", "aedge", "tedge", "weapon", "range", "armor", "ap", "adice", "edice", "timing", "esame", "nthrows", "tnOver", "tnOverToggle"]
+    .forEach(function (id) {
+      var el = $(id);
+      el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", scheduleReflow);
+    });
+  $("esame").addEventListener("change", function () { $("edice").disabled = this.checked; if (this.checked) $("edice").value = $("adice").value; });
+  $("adice").addEventListener("input", function () { if ($("esame").checked) $("edice").value = this.value; });
+  $("tnOverToggle").addEventListener("change", function () { $("tnOver").disabled = !this.checked; });
+  $("nthrows").addEventListener("change", function () { if (view === "dist") runDistribution(); });
+
+  $("rollBtn").addEventListener("click", rollPool);
+  $("sweepBtn").addEventListener("click", runSweep);
+
+  // theme
+  function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); $("themeBtn").textContent = (t === "dark" ? "◑" : "◐") + " Theme"; }
+  applyTheme(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  $("themeBtn").addEventListener("click", function () {
+    applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+  });
+
+  // init
+  $("edice").disabled = true;
+  buildConstEditor();
+  renderBandEditor();
+  switchView("dist");
+})();
+</script>
